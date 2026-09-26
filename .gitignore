@@ -1,0 +1,12 @@
+.venv/
+.vscode/
+.ruff_cache/
+.vscode/
+__pycache__/
+.cache/
+
+poetry.lock
+
+slop/
+tests/
+z_bin/
