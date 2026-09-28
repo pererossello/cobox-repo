@@ -170,6 +170,20 @@ class VectorField(eqx.Module):
     # --- FIELD & FIELD PRODUCT ARITHMETIC ---
     # ----------------------------------------
 
+    def norm(self) -> "ScalarField":
+        """Pointwise magnitude |v| in real space.
+        Nonlinear, not dealiased.
+        """
+        from .scalar import ScalarField
+
+        v = self.ifft()
+        norm_sq = jnp.sum(v.data**2, axis=0)
+        safe = jnp.sqrt(jnp.where(norm_sq > 0, norm_sq, 1.0))
+        return ScalarField(
+            data=jnp.where(norm_sq > 0, safe, 0.0),
+            box=v.box,
+        )
+
     def dot_product(
         self,
         other: "VectorField",
