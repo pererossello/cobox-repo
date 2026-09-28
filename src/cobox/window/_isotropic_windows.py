@@ -18,7 +18,7 @@ def is_isotropic_kind(kind: str) -> TypeGuard[IsotropicKindLiteral]:
 # ---------------------
 
 
-def _even_polynomial(x: jax.Array, coefficients: tuple[float, ...]) -> jax.Array:
+def _even_polynomial(x: ArrayLike, coefficients: tuple[float, ...]) -> ArrayLike:
     x2 = x * x
     value = coefficients[-1]
     for coefficient in reversed(coefficients[:-1]):
