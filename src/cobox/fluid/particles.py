@@ -131,7 +131,7 @@ class Particles(eqx.Module):
     def deposit(
         self,
         N: int,
-        bspline_order: Literal[0, 1, 2, 3],
+        bspline_order: int,
         bspline_scale: float | Literal["particles", "target_box"] = "particles",
         mesh_convention: MeshConventionLiteral = "node",
         weights: jax.Array | None = None,
