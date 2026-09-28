@@ -19,9 +19,6 @@ def growth_symbolic_pofk(cosmology: Cosmology, a: ArrayLike) -> jax.Array:
             "The symbolic_pofk backend supports only flat cosmologies (Omega_k = 0)."
         )
 
-    # Massless limit of get_approximate_D, with the (1 + z_eq) factors
-    # cancelled analytically. The massive-neutrino formula is singular at
-    # f_cb = 1 and produces NaN parameter gradients in float32.
     a = jnp.asarray(a, dtype=float)
     matter = c.Omega_m * a**-3
     dark_energy = (

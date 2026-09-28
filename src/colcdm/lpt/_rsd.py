@@ -1,46 +1,31 @@
-from typing import Tuple, Callable
+from __future__ import annotations
 
-import jax
+from typing import Tuple
+
 import jax.numpy as jnp
-from jax.typing import ArrayLike
 
-from cobox.field import VectorField
+from cobox.field import ScalarField, VectorField
+from ._observer import get_distance_and_n_los
 
 
-def radial_rsd(
+def get_dpsi_r_dlna_and_n_los(
     psi: VectorField,
-    vel: VectorField,
+    dpsi_dlna: VectorField,
     observer: Tuple[float, ...],
-) -> VectorField:
-
-    box = psi.box
-
-    if len(observer) != box.D:
-        raise ValueError(f"observer must have length {box.D}.")
-    for coord in observer:
-        if not (0.0 <= coord <= 1.0):
-            raise ValueError("observer coords must be between 0.0 and 1.0.")
-
-    observer_pos = jnp.asarray(observer) * box.L
+) -> tuple[ScalarField, VectorField]:
+    """Return (dPsi/dln a) · n_los and the unit line of sight."""
 
     psi = psi.ifft()
-    vel = vel.ifft()
-
-    observer_pos = jnp.asarray(observer, dtype=psi.data.dtype) * box.L
-    observer_pos = observer_pos.reshape((box.D,) + (1,) * box.D)
+    dpsi_dlna = dpsi_dlna.ifft()
 
     # Separation from the observer to the displaced position.
-    q = jnp.stack(box.x_grid, axis=0)
-    r = q + psi.data - observer_pos
+    r_vec = psi.box.vec_from_point(observer) + psi.data
+    _, n_los = get_distance_and_n_los(r_vec)
 
-    # Unit sightline; zero at the observer itself.
-    distance_sq = jnp.sum(r * r, axis=0)
-    distance = jnp.sqrt(jnp.where(distance_sq > 0, distance_sq, 1.0))
-    n = r / distance[None, ...]
+    # Project dPsi/dln a onto the line of sight.
+    dpsi_r_dlna = jnp.sum(dpsi_dlna.data * n_los, axis=0)
 
-    # Add radial component of v / (a H).
-    vel_radial = jnp.sum(vel.data * n, axis=0)
-    return VectorField(
-        psi.data + vel_radial[None, ...] * n,
-        box=box,
-    )
+    dpsi_r_dlna = ScalarField(dpsi_r_dlna, box=psi.box)
+    n_los = VectorField(n_los, box=psi.box)
+
+    return dpsi_r_dlna, n_los

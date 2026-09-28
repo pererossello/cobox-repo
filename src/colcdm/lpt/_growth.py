@@ -1,5 +1,6 @@
 from typing import Literal
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax.typing import ArrayLike
@@ -36,23 +37,21 @@ def coeffs(
     cosmology: Cosmology,
     linear_growth_kind: LinearGrowthKindLiteral = "symbolic_pofk",
     lpt_growth_kind: LPTGrowthKindLiteral = "ode",
+    *,
+    order: Literal[1, 2, 3] = 3,
 ) -> dict:
-
-    c = cosmology
+    """Growth coefficients c_n(a), pointwise in a."""
+    a = _validate_a(a)
     growth = LINEAR_GROWTH_DISPATCH[linear_growth_kind]
-    c1 = growth(c, a) / growth(c, 1.0)  # D_1(a) / D_1(1)
-
-    if lpt_growth_kind == "eds":
-        r = {k: 1.0 for k in SHAPE_KEYS}
-    elif lpt_growth_kind == "fit":
-        if not (c.is_flat and c.is_de_Lambda):
-            raise ValueError("growth kind 'fit' is calibrated for flat LCDM only")
-        Om_a = c.Omega_m_of_a(a)
-        r = {k: Om_a ** (-FIT_EXPONENT[k]) for k in SHAPE_KEYS}
-    elif lpt_growth_kind == "ode":
-        r = _ode_ratios(c, a)
-
-    return {k: EDS_COEFF[k] * c1 ** ORDER[k] * r[k] for k in SHAPE_KEYS}
+    c1 = growth(cosmology, a) / growth(cosmology, 1.0)  # D_1(a) / D_1(1)
+    if order == 1:
+        return {"1": c1}
+    r = _ratios(cosmology, a, lpt_growth_kind)
+    return {
+        k: EDS_COEFF[k] * c1 ** ORDER[k] * r[k]
+        for k in SHAPE_KEYS
+        if ORDER[k] <= order
+    }
 
 
 def rates(
@@ -60,16 +59,56 @@ def rates(
     cosmology: Cosmology,
     linear_growth_kind: LinearGrowthKindLiteral = "symbolic_pofk",
     lpt_growth_kind: LPTGrowthKindLiteral = "ode",
+    *,
+    order: Literal[1, 2, 3] = 3,
 ) -> dict:
+    """Growth rates f_n = d ln|c_n| / d ln a, pointwise in a."""
+    a = _validate_a(a)
+    growth = LINEAR_GROWTH_DISPATCH[linear_growth_kind]
+    f1 = _log_slope(lambda x: growth(cosmology, x), a)
+    if order == 1:
+        return {"1": f1}
+    if lpt_growth_kind == "ode":
+        _, dr = _ode_solution(cosmology, a)
+    else:
+        dr = _log_slope(lambda x: _ratios(cosmology, x, lpt_growth_kind), a)
+    return {k: ORDER[k] * f1 + dr[k] for k in SHAPE_KEYS if ORDER[k] <= order}
 
-    def log_coefficients(ln_a):
-        values = coeffs(jnp.exp(ln_a), cosmology, linear_growth_kind, lpt_growth_kind)
-        return {key: jnp.log(jnp.abs(values[key])) for key in SHAPE_KEYS}
 
+def _validate_a(a: ArrayLike) -> jax.Array:
+    a = jnp.asarray(a, dtype=float)
+    return eqx.error_if(
+        a,
+        jnp.any(~jnp.isfinite(a) | (a <= 0)),
+        "a must be finite and positive.",
+    )
+
+
+def _ratios(c: Cosmology, a: ArrayLike, lpt_growth_kind: LPTGrowthKindLiteral) -> dict:
+    """D_n / D_n^EdS at fixed D_1."""
+    a = jnp.asarray(a, dtype=float)
+    if lpt_growth_kind == "eds":
+        return {k: jnp.ones_like(a) for k in SHAPE_KEYS}
+    if lpt_growth_kind == "fit":
+        if not (c.is_flat and c.is_de_Lambda):
+            raise ValueError("growth kind 'fit' is calibrated for flat LCDM only")
+        Om_a = c.Omega_m_of_a(a)
+        return {k: Om_a ** (-FIT_EXPONENT[k]) for k in SHAPE_KEYS}
+    if lpt_growth_kind == "ode":
+        ratios, _ = _ode_solution(c, a)
+        return ratios
+    raise ValueError(f"Unknown LPT growth kind: {lpt_growth_kind!r}.")
+
+
+def _log_slope(fn, a: ArrayLike):
+    """d ln fn / d ln a for a fn that is pointwise in a (exact, forward mode)."""
     ln_a = jnp.log(jnp.asarray(a, dtype=float))
-    if ln_a.ndim != 0:
-        raise ValueError("rates expects a scalar scale factor.")
-    return jax.jacfwd(log_coefficients)(ln_a)
+    _, slope = jax.jvp(
+        lambda x: jax.tree.map(jnp.log, fn(jnp.exp(x))),
+        (ln_a,),
+        (jnp.ones_like(ln_a),),
+    )
+    return slope
 
 
 # -----------
@@ -102,10 +141,19 @@ def _rhs(c: "Cosmology", ln_a, y):
     )
 
 
-def _ode_ratios(c: "Cosmology", a, a_init: float = 1e-5, n_steps: int = 512) -> dict:
-    """Integrate from deep matter domination and return D_n / D_n^EdS."""
-    a = jnp.asarray(a, dtype=float)
-    ln_a0, ln_a1 = jnp.log(a_init), jnp.log(jnp.max(a))
+def _ode_solution(c: "Cosmology", a, a_init: float = 1e-5, n_steps: int = 512):
+    """Ratios and their log slopes on a fixed table, for a_init <= a <= 1.
+
+    Cubic Hermite interpolation of log ratios uses the integrated derivatives
+    at the nodes. Returned slopes differentiate that same interpolant.
+    """
+    a = _validate_a(a)
+    a = eqx.error_if(
+        a,
+        jnp.any((a < a_init) | (a > 1.0)),
+        f"ODE growth requires {a_init} <= a <= 1.",
+    )
+    ln_a0, ln_a1 = jnp.log(a_init), 0.0
     ai = a_init
     y0 = jnp.array(
         [
@@ -132,16 +180,29 @@ def _ode_ratios(c: "Cosmology", a, a_init: float = 1e-5, n_steps: int = 512) -> 
         return y, y
 
     _, ys = jax.lax.scan(step, y0, grid[:-1])
+    ys = jnp.concatenate([y0[None, :], ys], axis=0)
+    D1, F1, D2, F2, D3a, F3a, D3b, F3b, D3c = ys.T
+    D = {"1": D1, "2": D2, "3a": D3a, "3b": D3b, "3c": D3c}
+    F = {"1": F1, "2": F2, "3a": F3a, "3b": F3b, "3c": F1 * D2 - D1 * F2}
+
     ln_a = jnp.log(a)
+    index = jnp.clip(jnp.searchsorted(grid, ln_a, side="right") - 1, 0, n_steps - 1)
+    width = grid[index + 1] - grid[index]
+    offset = ln_a - grid[index]
 
-    def pick(col):
-        return jnp.interp(ln_a, grid[1:], ys[:, col])
+    def at_a(values, slopes):
+        y0, y1 = values[index], values[index + 1]
+        m0, m1 = slopes[index], slopes[index + 1]
+        secant = (y1 - y0) / width
+        quadratic = (3 * secant - 2 * m0 - m1) / width
+        cubic = (m0 + m1 - 2 * secant) / width**2
+        value = y0 + offset * (m0 + offset * (quadratic + offset * cubic))
+        slope = m0 + offset * (2 * quadratic + 3 * offset * cubic)
+        return jnp.exp(value), slope
 
-    D1, D2, D3a, D3b, D3c = pick(0), pick(2), pick(4), pick(6), pick(8)
-    return {
-        "1": jnp.ones_like(D1),
-        "2": D2 / (-3 / 7 * D1**2),
-        "3a": D3a / (1 / 3 * D1**3),
-        "3b": D3b / (-10 / 21 * D1**3),
-        "3c": D3c / (1 / 7 * D1**3),
-    }
+    ratios, ratio_rates = {}, {}
+    for k in SHAPE_KEYS:
+        log_ratio = jnp.log(D[k] / (EDS_COEFF[k] * D1 ** ORDER[k]))
+        log_slope = F[k] / D[k] - ORDER[k] * F1 / D1
+        ratios[k], ratio_rates[k] = at_a(log_ratio, log_slope)
+    return ratios, ratio_rates

@@ -1,5 +1,5 @@
 H0 = 100  # km/s/(Mpc/h)
-c_light = 299792.458  # km/s
+C_LIGHT = 299792.458  # km/s
 
 # SI constants used for explicit physical-density conversions.
 G_NEWTON = 6.67430e-11  # m^3 kg^-1 s^-2

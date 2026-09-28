@@ -217,6 +217,32 @@ class Box(eqx.Module):
         N_NEW = self.N * refine // under
         return replace(self, N=N_NEW)
 
+    # --------------------------
+    # --- RELATIVE DISTANCES ---
+    # --------------------------
+
+    def vec_from_point(self, point: tuple[float, ...]) -> jax.Array:
+        if len(point) != self.D:
+            raise ValueError(f"point must have length {self.D}.")
+        for coord in point:
+            if not (0.0 <= coord <= 1.0):
+                raise ValueError("point coords must be between 0.0 and 1.0.")
+        q = jnp.stack(self.x_grid, axis=0)
+        observer_pos = jnp.asarray(point, dtype=q.dtype) * self.L
+        return q - observer_pos.reshape((self.D,) + (1,) * self.D)
+
+    def distance_from_point(self, point: tuple[float, ...]) -> jax.Array:
+        """Distance from point to each grid point, in box length units."""
+        r = self.vec_from_point(point)
+        return jnp.sqrt(jnp.sum(r * r, axis=0))
+
+    def vec_norm_from_point(self, point: tuple[float, ...]) -> jax.Array:
+        """Unit vector from point to each grid point; zero at coincidence."""
+        r = self.vec_from_point(point)
+        distance_sq = jnp.sum(r * r, axis=0)
+        safe_distance = jnp.sqrt(jnp.where(distance_sq > 0, distance_sq, 1.0))
+        return r / safe_distance[None, ...]
+
     # ---------------------
     # --- SERIALIZATION ---
     # ---------------------

@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 
-from ._constants import H0, G_NEWTON, MPC_TO_M, M_SUN_TO_KG, c_light
+from ._constants import H0, G_NEWTON, MPC_TO_M, M_SUN_TO_KG, C_LIGHT
 from ._default_cosmos import DEFAULT_COSMOS, DEFAULT_NAME, DefaultCosmosLiteral
 
 CosmoParamLiteral = Literal[
@@ -150,6 +150,70 @@ class Cosmology(eqx.Module):
         q > 0 decelerating, q < 0 accelerating."""
         a = jnp.asarray(a)
         return -self.a_ddot(a) * a / self.a_dot(a) ** 2
+
+    # -----------------
+    # --- DISTANCES ---
+    # -----------------
+
+    def chi_of_a(
+        self,
+        a: ArrayLike,
+        *,
+        n_quad: int = 4096,
+        a_min: float = 1e-5,
+    ) -> jax.Array:
+        """Radial comoving distance chi(a) in Mpc/h, observed today.
+        chi(a) = (c / 100) integral_a^1 da' / (a'^2 E(a')).
+        """
+        from . import _distances
+
+        table = _distances.get_distance_table(self, n_quad=n_quad, a_min=a_min)
+        return _distances.chi_of_a(a, *table)
+
+    def a_of_chi(
+        self,
+        chi: ArrayLike,
+        *,
+        n_quad: int = 4096,
+        a_min: float = 1e-5,
+    ) -> jax.Array:
+        """Scale factor at radial comoving distance chi [Mpc/h]."""
+        from . import _distances
+
+        table = _distances.get_distance_table(self, n_quad=n_quad, a_min=a_min)
+        return _distances.a_of_chi(chi, *table)
+
+    def dchi_da(self, a: ArrayLike) -> jax.Array:
+        """Analytic derivative of chi(a): -(c / 100) / (a^2 E(a)), in Mpc/h."""
+        from . import _distances
+
+        return _distances.dchi_da(self, a)
+
+    def chi_of_varrho(self, varrho: ArrayLike) -> jax.Array:
+        """Isotropic coordinate radius -> radial comoving distance [Mpc/h].
+        Flat geometry is the identity."""
+        from . import _distances
+
+        return _distances.chi_of_varrho(self, varrho)
+
+    def dchi_dvarrho(self, varrho: ArrayLike) -> jax.Array:
+        """Analytic derivative of chi_of_varrho (1 in flat geometry)."""
+        from . import _distances
+
+        return _distances.dchi_dvarrho(self, varrho)
+
+    def varrho_of_chi(self, chi: ArrayLike) -> jax.Array:
+        """Radial comoving distance -> isotropic coordinate radius [Mpc/h]."""
+        from . import _distances
+
+        return _distances.varrho_of_chi(self, chi)
+
+    def S_k(self, chi: ArrayLike) -> jax.Array:
+        """Transverse comoving distance [Mpc/h] from radial distance chi.
+        Flat geometry returns chi."""
+        from . import _distances
+
+        return _distances.S_k(self, chi)
 
     # ---------------------
     # --- SERIALIZATION ---
