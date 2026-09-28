@@ -177,6 +177,28 @@ class ScalarField(eqx.Module):
             grad_kernel=grad_kernel
         )
 
+    def s_sq(
+        self,
+        *,
+        dealias: bool = False,
+        N_iso: int | None = None,
+        out_N: field_product.OutputN = None,
+        return_hat: bool = False,
+    ) -> "ScalarField":
+        """Tidal operator s_ij s_ij; real-space output by default."""
+        if self.box.D != 3:
+            raise ValueError("s_squared requires D == 3.")
+
+        tidal = self.inv_laplacian().hessian().traceless_part()
+
+        return tidal.trace_of_product(
+            tidal,
+            dealias=dealias,
+            N_iso=None if N_iso is None else (N_iso, N_iso),
+            out_N=out_N,
+            return_hat=return_hat,
+        )
+
     # ----------------------------------------
     # --- FIELD & FIELD PRODUCT ARITHMETIC ---
     # ----------------------------------------
