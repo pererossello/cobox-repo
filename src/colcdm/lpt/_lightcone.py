@@ -15,13 +15,13 @@ from ._observer import get_distance_and_n_los
 
 if TYPE_CHECKING:
     from ..background.cosmology import Cosmology
-    from .lpt import LPT
+    from .lpt import LPTBasis
 
 LightconeMethodLiteral = Literal["newton", "iterative"]
 
 
 def crossing_a(
-    lpt: LPT,
+    lpt: LPTBasis,
     cosmology: Cosmology,
     *,
     observer: tuple[float, ...],
