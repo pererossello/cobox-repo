@@ -1,5 +1,6 @@
 from typing import Callable, Literal
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax.typing import ArrayLike
@@ -14,11 +15,12 @@ TRANSFER_KINDS = ("symbolic_pofk",)
 def transfer_symbolic_pofk(cosmology: Cosmology, k: ArrayLike) -> jax.Array:
 
     c = cosmology
-    if not c.is_flat:
-        raise ValueError(
-            "The symbolic_pofk backend supports only flat cosmologies " "(Omega_k = 0)."
-        )
     k = jnp.asarray(k)
+    k = eqx.error_if(
+        k,
+        ~c.is_flat,
+        "The symbolic_pofk backend supports only flat cosmologies (Omega_k = 0).",
+    )
 
     k_safe = jnp.maximum(k, 1e-30)
     pk = jnp.asarray(
@@ -33,7 +35,7 @@ def transfer_symbolic_pofk(cosmology: Cosmology, k: ArrayLike) -> jax.Array:
             wa=c.wa,
         )
     )
-    return jnp.where(k > 0, pk, 0.0)
+    return jnp.where(k > 0, pk, 0.0)  # type: ignore
 
 
 TRANSFER_DISPATCH: dict[

@@ -109,13 +109,23 @@ class Particles(eqx.Module):
         interpolation: InterpolationMethodLiteral | None,
         wrap: bool = False,
     ):
-        """Sample a vector field and retain the resulting unwrapped position."""
+        """Sample a vector field and retain the resulting unwrapped position.
+
+        interpolation=None reads the field on its own grid nodes, i.e. at the
+        Lagrangian lattice q. Otherwise the field is interpolated at the
+        current wrapped position x. The two agree only while x == q.
+        """
         assert self.x is not None
         if interpolation is None:
-            if vector_field.box is not self.box:
+            if vector_field.box != self.box:
                 raise ValueError(
-                    "if interpolation is set to None "
-                    "VectorField box must be the same object as self.box"
+                    "interpolation=None requires VectorField box == self.box; "
+                    f"got {vector_field.box!r} and {self.box!r}."
+                )
+            if self.shift != 0.0:
+                raise ValueError(
+                    "interpolation=None requires shift == 0, since the lattice "
+                    f"is then off the field grid; got shift={self.shift}."
                 )
             disp = vector_field.ifft().data.reshape(vector_field.box.D, -1)
         else:

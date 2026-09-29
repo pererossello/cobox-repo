@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from numbers import Real
 from typing import Literal, TypeGuard, get_args, TYPE_CHECKING
 from ._separable_windows import (
     SeparableKindLiteral,
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
 
 class Window(eqx.Module):
     kind: WindowKindLiteral = eqx.field(static=True)
-    scale: float = eqx.field(static=True)  # full width
+    scale: float  # full width; a leaf, so it may be traced
     normalized: bool = eqx.field(static=True)  # whether integral over window is 1
 
     def __init__(
@@ -55,7 +56,8 @@ class Window(eqx.Module):
             raise ValueError(
                 f"unknown window kind: {self.kind!r}; expected one of {WINDOW_KINDS}."
             )
-        if self.scale <= 0:
+        # A traced scale cannot be checked here.
+        if isinstance(self.scale, Real) and self.scale <= 0:
             raise ValueError(f"scale must be positive; got {self.scale}.")
 
     @property
@@ -104,6 +106,17 @@ class Window(eqx.Module):
     # ---------------------
     # --- SERIALIZATION ---
     # ---------------------
+
+    def to_dict(self) -> dict:
+        from . import _serialize
+
+        return _serialize.window_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, config: dict) -> "Window":
+        from . import _serialize
+
+        return _serialize.window_from_dict(config)
 
     def to_yaml(self) -> str:
         from . import _serialize

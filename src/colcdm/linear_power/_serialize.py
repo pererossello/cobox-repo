@@ -1,8 +1,7 @@
 from __future__ import annotations
-from typing import Any, Optional, Type, TYPE_CHECKING
+from typing import Any, Type, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..background.cosmology import Cosmology
     from .linear_power import LinearMatterPowSpec
 
 
@@ -19,7 +18,6 @@ def linear_power_to_dict(spec: "LinearMatterPowSpec") -> dict[str, Any]:
 def linear_power_from_dict(
     config: dict,
     cls: Type[LinearMatterPowSpec],
-    cosmology: Optional[Cosmology] = None,
 ) -> LinearMatterPowSpec:
     unknown = set(config) - set(_LINEAR_POWER_FIELDS)
     if unknown:
@@ -29,7 +27,6 @@ def linear_power_from_dict(
     return cls(
         transfer_kind=config["transfer_kind"],
         growth_kind=config["growth_kind"],
-        cosmology=cosmology,
     )
 
 
@@ -42,8 +39,7 @@ def linear_power_to_yaml(spec: "LinearMatterPowSpec") -> str:
 def linear_power_from_yaml(
     s: str,
     cls: Type[LinearMatterPowSpec],
-    cosmology: Optional[Cosmology] = None,
 ) -> LinearMatterPowSpec:
     import yaml
 
-    return linear_power_from_dict(yaml.safe_load(s), cls, cosmology)
+    return linear_power_from_dict(yaml.safe_load(s), cls)

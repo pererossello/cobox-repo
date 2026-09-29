@@ -6,7 +6,11 @@ import jax.numpy as jnp
 from jax.typing import ArrayLike
 
 from ..background.cosmology import Cosmology
-from ..linear_power.linear_growth import LinearGrowthKindLiteral, LINEAR_GROWTH_DISPATCH
+from ..linear_power.linear_growth import (
+    LinearGrowthKindLiteral,
+    LINEAR_GROWTH_DISPATCH,
+    growth_factor,
+)
 
 LPTGrowthKindLiteral = Literal["eds", "fit", "ode"]
 
@@ -42,15 +46,12 @@ def coeffs(
 ) -> dict:
     """Growth coefficients c_n(a), pointwise in a."""
     a = _validate_a(a)
-    growth = LINEAR_GROWTH_DISPATCH[linear_growth_kind]
-    c1 = growth(cosmology, a) / growth(cosmology, 1.0)  # D_1(a) / D_1(1)
+    c1 = growth_factor(a, cosmology, linear_growth_kind)  # D_1(a) / D_1(1)
     if order == 1:
         return {"1": c1}
     r = _ratios(cosmology, a, lpt_growth_kind)
     return {
-        k: EDS_COEFF[k] * c1 ** ORDER[k] * r[k]
-        for k in SHAPE_KEYS
-        if ORDER[k] <= order
+        k: EDS_COEFF[k] * c1 ** ORDER[k] * r[k] for k in SHAPE_KEYS if ORDER[k] <= order
     }
 
 
@@ -90,8 +91,11 @@ def _ratios(c: Cosmology, a: ArrayLike, lpt_growth_kind: LPTGrowthKindLiteral) -
     if lpt_growth_kind == "eds":
         return {k: jnp.ones_like(a) for k in SHAPE_KEYS}
     if lpt_growth_kind == "fit":
-        if not (c.is_flat and c.is_de_Lambda):
-            raise ValueError("growth kind 'fit' is calibrated for flat LCDM only")
+        a = eqx.error_if(
+            a,
+            ~(c.is_flat & c.is_de_Lambda),
+            "growth kind 'fit' is calibrated for flat LCDM only",
+        )
         Om_a = c.Omega_m_of_a(a)
         return {k: Om_a ** (-FIT_EXPONENT[k]) for k in SHAPE_KEYS}
     if lpt_growth_kind == "ode":

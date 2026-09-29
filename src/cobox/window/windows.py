@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 class Windows(eqx.Module):
     """A chain of Windows"""
 
-    windows: tuple[Window, ...] = eqx.field(static=True)
+    windows: tuple[Window, ...]
 
     def __init__(self, windows: tuple[Window, ...]):
         if isinstance(windows, Window):

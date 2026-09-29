@@ -4,6 +4,15 @@ from colcdm.background._utils import a_of_z, z_of_a
 from colcdm.background.cosmology import Cosmology
 from colcdm.lpt.lpt import LPT, LPTBasis
 from colcdm.linear_power.linear_power import LinearMatterPowSpec
+from colcdm.linear_power.linear_growth import growth_factor
 
 
-__all__ = ["LPT", "LPTBasis", "Cosmology", "LinearMatterPowSpec", "a_of_z", "z_of_a"]
+__all__ = [
+    "LPT",
+    "LPTBasis",
+    "Cosmology",
+    "LinearMatterPowSpec",
+    "growth_factor",
+    "a_of_z",
+    "z_of_a",
+]

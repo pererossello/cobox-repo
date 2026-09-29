@@ -1,5 +1,4 @@
-"""Homogeneous wCDM background (late-time: no radiation, no neutrinos).
-
+"""
 Conventions
 - Primary parameters: h, Omega_b, Omega_cdm, Omega_k, n_s, As1e9, w0, wa.
     - Capital Omega_X = rho_X / rho_crit today (dimensionless)
@@ -80,12 +79,14 @@ class Cosmology(eqx.Module):
         return self.Omega_k * self.h**2
 
     @property
-    def is_flat(self) -> bool:
-        return abs(self.Omega_k) < 1e-5
+    def is_flat(self) -> jax.Array:
+        """Boolean array, so it can be checked under jit (eqx.error_if)."""
+        return jnp.abs(self.Omega_k) < 1e-5
 
     @property
-    def is_de_Lambda(self) -> bool:
-        return self.w0 == -1.0 and self.wa == 0.0
+    def is_de_Lambda(self) -> jax.Array:
+        """Boolean array, so it can be checked under jit (eqx.error_if)."""
+        return (jnp.asarray(self.w0) == -1.0) & (jnp.asarray(self.wa) == 0.0)
 
     # ------------
     # --- FLRW ---
