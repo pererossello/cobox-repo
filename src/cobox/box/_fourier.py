@@ -106,7 +106,8 @@ def dof_weight(box: "Box") -> jax.Array:
 def n_dof(mask: jax.Array, box: "Box") -> int:
     """Total real DOF represented by ``mask`` (a KSHAPE boolean array, read
     only at canonical positions -- see ``canonical_mask``)."""
-    return int(jnp.sum(dof_weight(box) * mask))
+    with jax.ensure_compile_time_eval():
+        return int(jnp.sum(dof_weight(box) * mask))
 
 
 def _dof_partition(
@@ -119,6 +120,20 @@ def _dof_partition(
     paired = keep & slab & ~corner
     free = keep & ~slab
     return corner, paired, free
+
+
+def _static_layout(
+    mask: jax.Array, box: "Box"
+) -> tuple[jax.Array, jax.Array, jax.Array, int, int]:
+    """(corner, paired, general, n_c, n_g) for ``mask``.
+
+    The mask depends only on static data, so this runs at trace time
+    (``ensure_compile_time_eval``) and the sizes are Python ints under jit.
+    """
+    with jax.ensure_compile_time_eval():
+        corner, paired, free = _dof_partition(mask, box)
+        general = paired | free
+        return corner, paired, general, int(jnp.sum(corner)), int(jnp.sum(general))
 
 
 def _rank_within_mask(mask_flat: jax.Array) -> jax.Array:
@@ -134,10 +149,7 @@ def pack(coeffs: jax.Array, mask: jax.Array, box: "Box") -> jax.Array:
     """Inverse of ``unpack``: flat real vector of length ``n_dof(mask, box)``
     -> KSHAPE complex array. ``mask`` must be a concrete (static) array.
     """
-    corner, paired, free = _dof_partition(mask, box)
-    general = paired | free
-    n_c = int(jnp.sum(corner))
-    n_g = int(jnp.sum(general))
+    corner, paired, general, n_c, n_g = _static_layout(mask, box)
 
     gen_vals = coeffs[n_c : n_c + n_g] + 1j * coeffs[n_c + n_g :]
 
@@ -166,10 +178,7 @@ def unpack(field_hat: jax.Array, mask: jax.Array, box: "Box") -> jax.Array:
     """Inverse of ``pack``: KSHAPE complex array -> flat real vector of length
     ``n_dof(mask, box)``. ``mask`` must be a concrete (static) array.
     """
-    corner, paired, free = _dof_partition(mask, box)
-    general = paired | free
-    n_c = int(jnp.sum(corner))
-    n_g = int(jnp.sum(general))
+    corner, _, general, n_c, n_g = _static_layout(mask, box)
 
     flat = field_hat.ravel()
     gen_vals = _compact(flat, general.ravel(), n_g)

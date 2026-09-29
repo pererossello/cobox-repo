@@ -119,12 +119,15 @@ class GRFSampler(eqx.Module):
         return min(cuts, default=None)
 
     def _get_mask(self, box: "Box"):
-        mask = jnp.ones(box.KSHAPE, dtype=bool)
-        assert isinstance(self.restrictions, tuple)
-        for r in self.restrictions:
-            mask = mask & r.mask(box)
-        # k=0 is never a free DOF: its power is always forced to zero.
-        return mask.at[(0,) * box.D].set(False)
+        # Depends only on static data: evaluate at trace time so the sizes
+        # derived from it (n_dof, pack/unpack) stay Python ints under jit.
+        with jax.ensure_compile_time_eval():
+            mask = jnp.ones(box.KSHAPE, dtype=bool)
+            assert isinstance(self.restrictions, tuple)
+            for r in self.restrictions:
+                mask = mask & r.mask(box)
+            # k=0 is never a free DOF: its power is always forced to zero.
+            return mask.at[(0,) * box.D].set(False)
 
     # ---------------------
     # --- SERIALIZATION ---
