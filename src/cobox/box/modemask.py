@@ -53,6 +53,21 @@ class IsoModeMask(eqx.Module):
             k = box.k
             return (k >= k_lo) & (k < k_hi)
 
+    def N_iso(self, box: "Box") -> Optional[int]:
+        """Smallest N_iso with every kept mode at |k_idx| < N_iso / 2."""
+        if self.mode == "nyquist_open":
+            n2_max = (box.N // 2) ** 2 - 1
+        elif self.mode == "nyquist_closed":
+            n2_max = (box.N // 2) ** 2
+        else:
+            assert self.k_range is not None
+            k_hi = self.k_range[1]
+            if k_hi is None:
+                return None
+            n2_max = int((float(k_hi) / box.K_RES) ** 2 * (1 + 1e-6))
+        n_iso = int((4 * n2_max) ** 0.5) + 1
+        return n_iso if n_iso <= box.N else None
+
     def _validate(self) -> None:
         if self.mode not in ("nyquist_open", "nyquist_closed", "custom"):
             raise ValueError(f"unknown iso mode: {self.mode!r}.")

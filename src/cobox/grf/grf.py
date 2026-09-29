@@ -23,15 +23,13 @@ class GRFSampler(eqx.Module):
 
     kind: KindLiteral = eqx.field(static=True)
     complex_base: Optional[ComplexBaseLiteral] = eqx.field(static=True, default=None)
-    restrictions: IsoModeMask | Sequence[IsoModeMask] = eqx.field(
-        static=True, default=()
-    )
+    restrictions: tuple[IsoModeMask, ...] = eqx.field(static=True, default=())
 
     def __init__(
         self,
         kind: KindLiteral,
         complex_base: Optional[ComplexBaseLiteral] = None,
-        restrictions=(),
+        restrictions: IsoModeMask | Sequence[IsoModeMask] = (),
     ):
         self.kind = kind
         self.complex_base = complex_base
@@ -109,6 +107,16 @@ class GRFSampler(eqx.Module):
     # ------------------
     # --- UTILITIES ----
     # ------------------
+
+    def N_iso(self, box: "Box") -> Optional[int]:
+        """Declared support |k_idx| < N_iso / 2 of sampled fields, or None.
+
+        Restrictions are intersected, so the smallest cut bounds the support.
+        """
+        if self.kind == "real":
+            return None
+        cuts = [n for r in self.restrictions if (n := r.N_iso(box)) is not None]
+        return min(cuts, default=None)
 
     def _get_mask(self, box: "Box"):
         mask = jnp.ones(box.KSHAPE, dtype=bool)
