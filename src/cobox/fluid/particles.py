@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from cobox.field.ops.interpolation import InterpolationMethodLiteral
 
 MeshConventionLiteral = Literal["node", "cell"]
+BSplineScaleLiteral = Literal["particles", "target_box"]
 
 
 class Particles(eqx.Module):
@@ -132,12 +133,12 @@ class Particles(eqx.Module):
         self,
         N: int,
         bspline_order: int,
-        bspline_scale: float | Literal["particles", "target_box"] = "particles",
+        bspline_scale: float | BSplineScaleLiteral = "particles",
         mesh_convention: MeshConventionLiteral = "node",
         weights: jax.Array | None = None,
         return_contrast: bool = False,
     ) -> ScalarField:
-        """Integrate separable particle clouds over periodic target cells.
+        """Integrate separable particle clouds over periodic target cells.Literal["particles", "target_box"]
 
         Order 0 is a point mass (NGP). Orders 1, 2, and 3 use a top-hat,
         triangular, and quadratic B-spline cloud, respectively.
