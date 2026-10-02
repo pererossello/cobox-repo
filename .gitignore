@@ -7,6 +7,7 @@ __pycache__/
 
 poetry.lock
 
+docs/
 slop/
 tests/
 z_bin/
