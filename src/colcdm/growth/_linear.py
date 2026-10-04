@@ -1,20 +1,22 @@
-from typing import Literal, Callable
+from collections.abc import Callable
+from typing import Literal
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 
-from ..background.cosmology import Cosmology
+from ..cosmology.background import BackgroundCosmo
+from ._ode import A_INIT, N_STEPS, check_a_range, hermite_interp, ode_table
 from ._symbolic_pofk import growth_correction_R
 
-LinearGrowthKindLiteral = Literal["symbolic_pofk", "hypergeometric"]
-LINEAR_GROWTH_KINDS = ("symbolic_pofk", "hypergeometric")
+LinearGrowthKindLiteral = Literal["symbolic_pofk", "hypergeometric", "ode"]
+LINEAR_GROWTH_KINDS = ("symbolic_pofk", "hypergeometric", "ode")
 
 
-def growth_symbolic_pofk(cosmology: Cosmology, a: ArrayLike) -> jax.Array:
+def growth_symbolic_pofk(background: BackgroundCosmo, a: ArrayLike) -> jax.Array:
 
-    c = cosmology
+    c = background
     a = jnp.asarray(a, dtype=float)
     a = eqx.error_if(
         a,
@@ -24,7 +26,7 @@ def growth_symbolic_pofk(cosmology: Cosmology, a: ArrayLike) -> jax.Array:
     matter = c.Omega_m * a**-3
     dark_energy = (
         (1.0 - c.Omega_m) * a ** (-3 * (1 + c.w0 + c.wa)) * jnp.exp(-3 * c.wa * (1 - a))
-    )
+    )  # type: ignore
     total = matter + dark_energy
     Om_a = matter / total
     OL_a = dark_energy / total
@@ -44,12 +46,12 @@ def growth_symbolic_pofk(cosmology: Cosmology, a: ArrayLike) -> jax.Array:
     return D1 * jnp.sqrt(R)  # type: ignore
 
 
-def growth_hypergeometric(cosmology: Cosmology, a: ArrayLike) -> jax.Array:
+def growth_hypergeometric(background: BackgroundCosmo, a: ArrayLike) -> jax.Array:
     """
     Linear growth factor D1(a) via the symbolic hypergeometric approximation of
     Bartlett & Pandey 2025 (arXiv:2510.18749), Eq. 2.4.
     """
-    c = cosmology
+    c = background
     a = jnp.asarray(a)
     a = eqx.error_if(a, ~c.is_flat, "Only works for flat cosmologies")
     a = eqx.error_if(
@@ -60,25 +62,28 @@ def growth_hypergeometric(cosmology: Cosmology, a: ArrayLike) -> jax.Array:
     return a * jnp.sqrt(b0 ** (2 / 3) + b1) / jnp.sqrt((b0 - x) ** (2 / 3) + b1)  # type: ignore
 
 
+def growth_ode(
+    background: BackgroundCosmo,
+    a: ArrayLike,
+    *,
+    a_init: float = A_INIT,
+    n_steps: int = N_STEPS,
+) -> jax.Array:
+    """
+    Linear growth factor D1(a) from the growth ODE of the background
+    (matter, curvature and CPL dark energy; no radiation), for a_init <= a <= 1.
+    Growing mode D1 -> a at early times, as for the other kinds.
+    """
+    a = check_a_range(jnp.asarray(a, dtype=float), a_init)
+    grid, D, F = ode_table(background, a_init=a_init, n_steps=n_steps)
+    log_D, _ = hermite_interp(grid, jnp.log(D), F / D, jnp.log(a))
+    return jnp.exp(log_D)
+
+
 LINEAR_GROWTH_DISPATCH: dict[
-    LinearGrowthKindLiteral, Callable[[Cosmology, ArrayLike], jax.Array]
+    LinearGrowthKindLiteral, Callable[[BackgroundCosmo, ArrayLike], jax.Array]
 ] = {
     "symbolic_pofk": growth_symbolic_pofk,
     "hypergeometric": growth_hypergeometric,
+    "ode": growth_ode,
 }
-
-
-def growth_factor(
-    a: ArrayLike,
-    cosmology: Cosmology,
-    kind: LinearGrowthKindLiteral = "symbolic_pofk",
-    normalized: bool = True,
-) -> jax.Array:
-    """Linear growth factor D(a); normalized=True returns D(a) / D(1)."""
-    if kind not in LINEAR_GROWTH_DISPATCH:
-        raise ValueError(
-            f"unknown linear growth kind: {kind!r}; expected one of {LINEAR_GROWTH_KINDS}."
-        )
-    growth = LINEAR_GROWTH_DISPATCH[kind]
-    D = growth(cosmology, a)
-    return D / growth(cosmology, 1.0) if normalized else D

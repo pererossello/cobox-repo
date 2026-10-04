@@ -1,54 +1,29 @@
-"""
-Conventions
-- Primary parameters: h, Omega_b, Omega_cdm, Omega_k, n_s, As1e9, w0, wa.
-    - Capital Omega_X = rho_X / rho_crit today (dimensionless)
-    - lowercase omega_X = Omega_X h^2 (physical density).
-- Dark energy: CPL, w(a) = w0 + wa (1 - a). LCDM for w0 = -1, wa = 0.
-- As1e9 = 1e9 A_s at k_pivot = 0.05 Mpc^-1
-"""
+"""Background parameters and FLRW calculations (matter, curvature and CPL dark energy).
 
-from typing import Literal
-import json
+Capital Omega values are present-day density fractions; omega = Omega * h**2.
+Distances use Mpc/h and H(a) uses km/s/Mpc. Radiation is not included.
+"""
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 
-from ._constants import H0, G_NEWTON, MPC_TO_M, M_SUN_TO_KG, C_LIGHT
-from ._default_cosmos import DEFAULT_COSMOS, DEFAULT_NAME, DefaultCosmosLiteral
+from ._constants import H0
+from ._utils import a_of_z, z_of_a
 
-CosmoParamLiteral = Literal[
-    "Omega_b", "Omega_cdm", "Omega_k", "n_s", "As1e9", "w0", "wa"
-]
-COSMO_PARAMS = ["Omega_b", "Omega_cdm", "Omega_k", "h", "n_s", "As1e9", "w0", "wa"]
+BACKGROUND_PARAMS = ("h", "Omega_b", "Omega_cdm", "Omega_k", "w0", "wa")
 
 
-class Cosmology(eqx.Module):
+class BackgroundCosmo(eqx.Module):
+    """Expansion and distance parameters, independently usable without primordial data."""
+
     h: float
     Omega_b: float
     Omega_cdm: float
     Omega_k: float
-    n_s: float
-    As1e9: float
     w0: float = -1.0
     wa: float = 0.0
-
-    @classmethod
-    def from_preset(
-        cls, name: DefaultCosmosLiteral = DEFAULT_NAME, **overrides
-    ) -> "Cosmology":
-        """Build a Cosmology from a named preset (see ``_default_cosmos``).
-
-        ``overrides`` perturb individual parameters on top of the preset, e.g.
-        ``Cosmology.from_preset("planck18", h=0.70)``.
-        """
-        if name not in DEFAULT_COSMOS:
-            raise KeyError(
-                f"unknown cosmology preset {name!r}; "
-                f"available: {sorted(DEFAULT_COSMOS)}."
-            )
-        return cls(**{**DEFAULT_COSMOS[name], **overrides})
 
     @property
     def Omega_de(self) -> float:
@@ -88,6 +63,20 @@ class Cosmology(eqx.Module):
         """Boolean array, so it can be checked under jit (eqx.error_if)."""
         return (jnp.asarray(self.w0) == -1.0) & (jnp.asarray(self.wa) == 0.0)
 
+    # ---------------------------
+    # --- REDSHIFT CONVERSION ---
+    # ---------------------------
+
+    @staticmethod
+    def a_of_z(z: ArrayLike) -> ArrayLike:
+        """Scale factor a = 1 / (1 + z); independent of the parameters."""
+        return a_of_z(z)
+
+    @staticmethod
+    def z_of_a(a: ArrayLike) -> ArrayLike:
+        """Redshift z = 1 / a - 1; independent of the parameters."""
+        return z_of_a(a)
+
     # ------------
     # --- FLRW ---
     # ------------
@@ -108,6 +97,15 @@ class Cosmology(eqx.Module):
     def H(self, a: ArrayLike) -> jax.Array:
         """Hubble rate H(a) in km/s/Mpc (H_0 = 100 h km/s/Mpc)."""
         return H0 * self.h * self.E(a)
+
+    def dlnH_dlna(self, a: ArrayLike) -> jax.Array:
+        """Logarithmic slope d ln H / d ln a = -(3 Om(a) + 2 Ok(a) + 3 (1 + w) Ode(a)) / 2."""
+        a = jnp.asarray(a)
+        return -0.5 * (
+            3.0 * self.Omega_m_of_a(a)
+            + 2.0 * self.Omega_k_of_a(a)
+            + 3.0 * (1.0 + self.w_de(a)) * self.Omega_de_of_a(a)
+        )
 
     def Omega_m_of_a(self, a: ArrayLike) -> jax.Array:
         a = jnp.asarray(a)
@@ -216,46 +214,15 @@ class Cosmology(eqx.Module):
 
         return _distances.S_k(self, chi)
 
-    # ---------------------
-    # --- SERIALIZATION ---
-    # ---------------------
-
     def to_dict(self) -> dict:
-        dict_ = {name: float(getattr(self, name)) for name in COSMO_PARAMS}
-        return dict_
+        """Serialize scalar parameters on the host, outside JAX transformations."""
+        return {name: float(getattr(self, name)) for name in BACKGROUND_PARAMS}
 
     @classmethod
-    def from_dict(cls, config: dict) -> "Cosmology":
-        unknown = set(config) - set(COSMO_PARAMS)
+    def from_dict(cls, config: dict) -> "BackgroundCosmo":
+        unknown = set(config) - set(BACKGROUND_PARAMS)
         if unknown:
-            raise ValueError(f"unknown keys in Cosmology config: {sorted(unknown)}.")
-        return cls(**{name: float(value) for name, value in config.items()})
-
-    def to_json(self, path) -> None:
-        with open(path, "w") as f:
-            json.dump(self.to_dict(), f, indent=2)
-
-    @classmethod
-    def from_json(cls, path) -> "Cosmology":
-        with open(path) as f:
-            return cls.from_dict(json.load(f))
-
-    # -----------------------
-    # --- SPECIAL METHODS ---
-    # -----------------------
-
-    def __repr__(self) -> str:
-        fields = ", ".join(
-            f"{name}={getattr(self, name)!r}"
-            for name in (
-                "h",
-                "Omega_b",
-                "Omega_cdm",
-                "Omega_k",
-                "n_s",
-                "As1e9",
-                "w0",
-                "wa",
+            raise ValueError(
+                f"unknown keys in BackgroundCosmo config: {sorted(unknown)}."
             )
-        )
-        return f"Cosmology({fields})"
+        return cls(**config)

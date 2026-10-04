@@ -12,8 +12,8 @@ from jax.typing import ArrayLike
 from cobox.field import ScalarField
 from cobox.field.ops.field_product import OutputN
 
-from ..background._constants import C_LIGHT
-from ..linear_power.linear_growth import LINEAR_GROWTH_DISPATCH, LinearGrowthKindLiteral
+from ..cosmology._constants import C_LIGHT
+from ..growth import Growth
 from ._basis import _build_basis, _LPTBasis
 from ._growth import LPTGrowthKindLiteral, coeffs, rates
 from ._lightcone import LightconeMethodLiteral, crossing_a
@@ -23,7 +23,8 @@ from ._rsd import get_dpsi_r_dlna_and_n_los
 if TYPE_CHECKING:
     from cobox.box import Box
     from cobox.field import VectorField
-    from ..background.cosmology import Cosmology
+
+    from ..cosmology.background import BackgroundCosmo
 
 LPTOrderLiteral = Literal[1, 2, 3]
 
@@ -31,7 +32,7 @@ _LPT_FIELDS = (
     "order",
     "dealias",
     "transverse",
-    "linear_growth_kind",
+    "growth",
     "lpt_growth_kind",
     "out_N",
 )
@@ -47,9 +48,7 @@ class LPT(eqx.Module):
     order: LPTOrderLiteral = eqx.field(static=True)
     dealias: bool = eqx.field(static=True, default=True)
     transverse: bool = eqx.field(static=True, default=True)
-    linear_growth_kind: LinearGrowthKindLiteral = eqx.field(
-        static=True, default="symbolic_pofk"
-    )
+    growth: Growth = eqx.field(default_factory=Growth)
     lpt_growth_kind: LPTGrowthKindLiteral = eqx.field(static=True, default="fit")
     out_N: OutputN = eqx.field(static=True, default=None)
 
@@ -75,20 +74,20 @@ class LPT(eqx.Module):
     # --- GROWTH ---
     # --------------
 
-    def coeffs(self, a: ArrayLike, cosmology: Cosmology) -> dict:
+    def coeffs(self, a: ArrayLike, background: BackgroundCosmo) -> dict:
         return coeffs(
             a,
-            cosmology,
-            self.linear_growth_kind,
+            background,
+            self.growth,
             self.lpt_growth_kind,
             order=self.order,
         )
 
-    def rates(self, a: ArrayLike, cosmology: Cosmology) -> dict:
+    def rates(self, a: ArrayLike, background: BackgroundCosmo) -> dict:
         return rates(
             a,
-            cosmology,
-            self.linear_growth_kind,
+            background,
+            self.growth,
             self.lpt_growth_kind,
             order=self.order,
         )
@@ -98,13 +97,25 @@ class LPT(eqx.Module):
     # ---------------------
 
     def to_dict(self) -> dict[str, Any]:
-        return {name: getattr(self, name) for name in _LPT_FIELDS}
+        return {
+            name: (self.growth.to_dict() if name == "growth" else getattr(self, name))
+            for name in _LPT_FIELDS
+        }
 
     @classmethod
     def from_dict(cls, config: dict) -> LPT:
-        unknown = set(config) - set(_LPT_FIELDS)
+        config = dict(config)
+        unknown = set(config) - set(_LPT_FIELDS) - {"linear_growth_kind"}
         if unknown:
             raise ValueError(f"unknown keys in LPT config: {sorted(unknown)}.")
+        if "growth" in config and "linear_growth_kind" in config:
+            raise ValueError(
+                "Specify only one of growth and legacy linear_growth_kind."
+            )
+        if "growth" in config:
+            config["growth"] = Growth.from_dict(config["growth"])
+        elif "linear_growth_kind" in config:
+            config["growth"] = Growth(config.pop("linear_growth_kind"))
         return cls(**config)
 
     def to_yaml(self) -> str:
@@ -131,10 +142,8 @@ class LPT(eqx.Module):
             raise ValueError("order must be 1, 2, or 3.")
         if not isinstance(self.dealias, bool) or not isinstance(self.transverse, bool):
             raise TypeError("dealias and transverse must be bools.")
-        if self.linear_growth_kind not in LINEAR_GROWTH_DISPATCH:
-            raise ValueError(
-                f"Unknown linear growth kind: {self.linear_growth_kind!r}."
-            )
+        if not isinstance(self.growth, Growth):
+            raise TypeError("growth must be a Growth instance.")
         if self.lpt_growth_kind not in ("eds", "fit", "ode"):
             raise ValueError(f"Unknown LPT growth kind: {self.lpt_growth_kind!r}.")
         if self.out_N is not None and self.out_N != "full":
@@ -153,7 +162,7 @@ class LPTBasis(eqx.Module):
     for repeated evaluations at per-point times.
     """
 
-    lpt: LPT = eqx.field(static=True)
+    lpt: LPT
     shapes: _LPTBasis
 
     @property
@@ -172,24 +181,24 @@ class LPTBasis(eqx.Module):
     def get_psi(
         self,
         a: ArrayLike,
-        cosmology: Cosmology,
+        background: BackgroundCosmo,
     ) -> VectorField:
         """Evaluate at a scalar time or one time per Lagrangian grid point.
 
         Scalar a preserves the stored space; a grid of times returns real space.
         """
-        weights = self.lpt.coeffs(a, cosmology)
+        weights = self.lpt.coeffs(a, background)
         return self._space_for(a)._combine(weights)
 
     def get_psi_and_dpsi_dlna(
         self,
         a: ArrayLike,
-        cosmology: Cosmology,
+        background: BackgroundCosmo,
     ) -> tuple[VectorField, VectorField]:
         """Real-space psi and dpsi/dln a, both in Mpc/h."""
         shapes = self._space_for(a)
-        c = self.lpt.coeffs(a, cosmology)
-        f = self.lpt.rates(a, cosmology)
+        c = self.lpt.coeffs(a, background)
+        f = self.lpt.rates(a, background)
         psi = shapes._combine(c).ifft()
 
         if self.lpt.order == 1:
@@ -207,12 +216,12 @@ class LPTBasis(eqx.Module):
     def get_psi_rsd(
         self,
         a: ArrayLike,
-        cosmology: Cosmology,
+        background: BackgroundCosmo,
         *,
         observer: tuple[float, ...],
     ) -> VectorField:
         """Radial redshift-space displacement at a scalar or per-point a."""
-        psi, dpsi_dlna = self.get_psi_and_dpsi_dlna(a, cosmology)
+        psi, dpsi_dlna = self.get_psi_and_dpsi_dlna(a, background)
         dpsi_r_dlna, n_los = get_dpsi_r_dlna_and_n_los(psi, dpsi_dlna, observer)
         return replace(
             psi,
@@ -222,12 +231,12 @@ class LPTBasis(eqx.Module):
     def get_dpsi_dlna_and_n_los(
         self,
         a: ArrayLike,
-        cosmology: Cosmology,
+        background: BackgroundCosmo,
         *,
         observer: tuple[float, ...],
     ) -> tuple[VectorField, VectorField]:
         """Return dPsi/dln a in Mpc/h and the unit line of sight."""
-        psi, dpsi_dlna = self.get_psi_and_dpsi_dlna(a, cosmology)
+        psi, dpsi_dlna = self.get_psi_and_dpsi_dlna(a, background)
         r_vec = psi.box.vec_from_point(observer) + psi.data
         _, n_los = get_distance_and_n_los(r_vec)
         return dpsi_dlna, replace(psi, data=n_los)
@@ -235,19 +244,19 @@ class LPTBasis(eqx.Module):
     def get_z_rsd(
         self,
         a: ArrayLike,
-        cosmology: Cosmology,
+        background: BackgroundCosmo,
         *,
         observer: tuple[float, ...],
     ) -> ScalarField:
         """Non-relativistic peculiar redshift increment."""
         dpsi_dlna, n_los = self.get_dpsi_dlna_and_n_los(
             a,
-            cosmology,
+            background,
             observer=observer,
         )
         dpsi_r_dlna = jnp.sum(dpsi_dlna.data * n_los.data, axis=0)
 
-        delta_z = cosmology.H(a) / (cosmology.h * C_LIGHT) * dpsi_r_dlna
+        delta_z = background.H(a) / (background.h * C_LIGHT) * dpsi_r_dlna
         return ScalarField(
             delta_z,
             box=dpsi_dlna.box,
@@ -259,7 +268,7 @@ class LPTBasis(eqx.Module):
 
     def get_a_lc(
         self,
-        cosmology: Cosmology,
+        background: BackgroundCosmo,
         *,
         observer: tuple[float, ...],
         method: LightconeMethodLiteral = "newton",
@@ -268,7 +277,7 @@ class LPTBasis(eqx.Module):
         """Past light-cone crossing scale factor, one per grid point."""
         return crossing_a(
             self,
-            cosmology,
+            background,
             observer=observer,
             method=method,
             n_iter=n_iter,
@@ -276,7 +285,7 @@ class LPTBasis(eqx.Module):
 
     def get_psi_lc(
         self,
-        cosmology: Cosmology,
+        background: BackgroundCosmo,
         *,
         observer: tuple[float, ...],
         rsd: bool = False,
@@ -285,11 +294,11 @@ class LPTBasis(eqx.Module):
     ) -> tuple[jax.Array, VectorField]:
         """Crossing scale factors and displacement, optionally with radial RSD."""
         basis = self.ifft()
-        a = basis.get_a_lc(cosmology, observer=observer, method=method, n_iter=n_iter)
+        a = basis.get_a_lc(background, observer=observer, method=method, n_iter=n_iter)
         psi = (
-            basis.get_psi_rsd(a, cosmology, observer=observer)
+            basis.get_psi_rsd(a, background, observer=observer)
             if rsd
-            else basis.get_psi(a, cosmology)
+            else basis.get_psi(a, background)
         )
         return a, psi
 

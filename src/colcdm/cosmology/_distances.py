@@ -7,14 +7,14 @@ import jax
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 
-from ._constants import H0, C_LIGHT
+from ._constants import C_LIGHT, H0
 
 if TYPE_CHECKING:
-    from .cosmology import Cosmology
+    from .background import BackgroundCosmo
 
 
 def get_distance_table(
-    cosmology: "Cosmology",
+    background: "BackgroundCosmo",
     *,
     n_quad: int = 4096,
     a_min: float = 1e-5,
@@ -28,7 +28,7 @@ def get_distance_table(
     a_grid = jnp.geomspace(a_min, 1.0, n_quad)
     # Set endpoints explicitly so roundoff cannot reject a == a_min or 1.
     a_grid = a_grid.at[0].set(a_min).at[-1].set(1.0)
-    integrand = _chi_integrand(cosmology, a_grid)
+    integrand = _chi_integrand(background, a_grid)
     integrand = eqx.error_if(
         integrand,
         jnp.any(~jnp.isfinite(integrand) | (integrand <= 0)),
@@ -61,15 +61,15 @@ def _interp_checked(
     return jnp.interp(array.ravel(), xp, fp).reshape(array.shape)
 
 
-def _chi_integrand(cosmology: "Cosmology", a: jax.Array) -> jax.Array:
+def _chi_integrand(background: "BackgroundCosmo", a: jax.Array) -> jax.Array:
     """-dchi/da in units of c/100: 1 / (a^2 E(a))."""
-    return 1.0 / (a ** 2 * cosmology.E(a))
+    return 1.0 / (a**2 * background.E(a))
 
 
-def dchi_da(cosmology: "Cosmology", a: ArrayLike) -> jax.Array:
+def dchi_da(background: "BackgroundCosmo", a: ArrayLike) -> jax.Array:
     """Analytic derivative of chi(a), in Mpc/h."""
     a = jnp.asarray(a, dtype=float)
-    return -(C_LIGHT / H0) * _chi_integrand(cosmology, a)
+    return -(C_LIGHT / H0) * _chi_integrand(background, a)
 
 
 def chi_of_a(a: ArrayLike, a_grid: jax.Array, chi_grid: jax.Array) -> jax.Array:
@@ -104,14 +104,14 @@ def _nonnegative_distance(value: ArrayLike, name: str) -> jax.Array:
     )
 
 
-def chi_of_varrho(cosmology: "Cosmology", varrho: ArrayLike) -> jax.Array:
+def chi_of_varrho(background: "BackgroundCosmo", varrho: ArrayLike) -> jax.Array:
     """Isotropic coordinate radius -> radial comoving distance, in Mpc/h.
 
     R0 = (c/100) / sqrt(|Omega_k|).
     Closed: 2 R0 atan(varrho / (2 R0)); open: 2 R0 atanh(varrho / (2 R0)).
     Open coordinates require varrho < 2 R0. The flat limit is the identity.
     """
-    varrho, s = _varrho_curvature(cosmology, varrho)
+    varrho, s = _varrho_curvature(background, varrho)
     series = 1 + s * (1 / 3 + s * (1 / 5 + s * (1 / 7 + s / 9)))
     open_root = jnp.sqrt(jnp.where(s > _SERIES_LIMIT, s, _SERIES_LIMIT))
     closed_root = jnp.sqrt(jnp.where(s < -_SERIES_LIMIT, -s, _SERIES_LIMIT))
@@ -123,18 +123,18 @@ def chi_of_varrho(cosmology: "Cosmology", varrho: ArrayLike) -> jax.Array:
     return varrho * jnp.where(jnp.abs(s) <= _SERIES_LIMIT, series, exact)
 
 
-def dchi_dvarrho(cosmology: "Cosmology", varrho: ArrayLike) -> jax.Array:
+def dchi_dvarrho(background: "BackgroundCosmo", varrho: ArrayLike) -> jax.Array:
     """Analytic derivative of chi_of_varrho: 1 / (1 - Omega_k (H0 varrho / 2c)^2)."""
-    _, s = _varrho_curvature(cosmology, varrho)
+    _, s = _varrho_curvature(background, varrho)
     return 1.0 / (1.0 - s)
 
 
 def _varrho_curvature(
-    cosmology: "Cosmology", varrho: ArrayLike
+    background: "BackgroundCosmo", varrho: ArrayLike
 ) -> tuple[jax.Array, jax.Array]:
     """Validated varrho and s = Omega_k (H0 varrho / 2c)^2 = +-(varrho / 2 R0)^2."""
     varrho = _nonnegative_distance(varrho, "varrho")
-    s = cosmology.Omega_k * (H0 * varrho / (2 * C_LIGHT)) ** 2
+    s = background.Omega_k * (H0 * varrho / (2 * C_LIGHT)) ** 2
     s = cast(
         jax.Array,
         eqx.error_if(s, jnp.any(s >= 1), "Open geometry requires varrho < 2 R0."),
@@ -142,14 +142,14 @@ def _varrho_curvature(
     return varrho, s
 
 
-def varrho_of_chi(cosmology: "Cosmology", chi: ArrayLike) -> jax.Array:
+def varrho_of_chi(background: "BackgroundCosmo", chi: ArrayLike) -> jax.Array:
     """Radial distance -> isotropic coordinate radius, in Mpc/h.
 
     Closed: 2 R0 tan(chi / (2 R0)); open: 2 R0 tanh(chi / (2 R0)).
     Closed coordinates require chi < pi R0 (before the antipode).
     """
     chi = _nonnegative_distance(chi, "chi")
-    s = cosmology.Omega_k * (H0 * chi / (2 * C_LIGHT)) ** 2
+    s = background.Omega_k * (H0 * chi / (2 * C_LIGHT)) ** 2
     s = cast(
         jax.Array,
         eqx.error_if(
@@ -169,19 +169,19 @@ def varrho_of_chi(cosmology: "Cosmology", chi: ArrayLike) -> jax.Array:
     return chi * jnp.where(jnp.abs(s) <= _SERIES_LIMIT, series, exact)
 
 
-def S_k(cosmology: "Cosmology", chi: ArrayLike) -> jax.Array:
+def S_k(background: "BackgroundCosmo", chi: ArrayLike) -> jax.Array:
     """Transverse comoving distance S_k(chi), in Mpc/h.
 
     Closed: R0 sin(chi/R0); flat: chi; open: R0 sinh(chi/R0).
     The closed case is restricted to chi < pi R0, before the antipode.
     """
     chi = _nonnegative_distance(chi, "chi")
-    t = cosmology.Omega_k * (H0 * chi / C_LIGHT) ** 2
+    t = background.Omega_k * (H0 * chi / C_LIGHT) ** 2
     t = cast(
         jax.Array,
         eqx.error_if(
             t,
-            jnp.any(t <= -(jnp.pi ** 2)),
+            jnp.any(t <= -(jnp.pi**2)),
             "Closed geometry requires chi < pi R0 (before the antipode).",
         ),
     )

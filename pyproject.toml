@@ -32,6 +32,8 @@ pythonpath = ["src"]
 packages = [
     { include = "cobox", from = "src" },
     { include = "colcdm", from = "src" },
+    { include = "cosphere", from = "src" },
+    { include = "cozcat", from = "src" },
 ]
 
 [tool.poetry.group.dev.dependencies]

@@ -1,5 +1,6 @@
 H0 = 100  # km/s/(Mpc/h)
 C_LIGHT = 299792.458  # km/s
+T_CMB = 2.7255  # K, CMB temperature today
 
 # SI constants used for explicit physical-density conversions.
 G_NEWTON = 6.67430e-11  # m^3 kg^-1 s^-2
