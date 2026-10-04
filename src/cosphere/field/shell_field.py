@@ -9,6 +9,7 @@ from .ops import arithmetic
 
 if TYPE_CHECKING:
     from ..shell import Shell
+    from .stats._accessor import StatsAccessor
 
 
 class ShellField(eqx.Module):
@@ -76,6 +77,13 @@ class ShellField(eqx.Module):
 
     def __rtruediv__(self, other):
         raise TypeError("c / field is not supported.")
+
+    @property
+    def stats(self) -> "StatsAccessor":
+        """Stateless shortcuts to cosphere.field.stats estimators."""
+        from .stats._accessor import StatsAccessor
+
+        return StatsAccessor(self)
 
     # ---------------------
     # --- ARRAY SURFACE ---
