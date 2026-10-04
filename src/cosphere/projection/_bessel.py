@@ -41,6 +41,8 @@ def _j01(x: jax.Array) -> tuple[jax.Array, jax.Array]:
 def _upward(x: jax.Array, ell_max: int) -> jax.Array:
     """Ascending recurrence, used only when x > ell_max and x >= 1."""
     j0, j1 = _j01(x)
+    if ell_max == 0:
+        return j0[None]
 
     def step(pair, ell):
         previous, current = pair
@@ -86,20 +88,46 @@ def _downward(x: jax.Array, ell_max: int, n_start: int) -> jax.Array:
 @partial(jax.custom_jvp, nondiff_argnums=(1,))
 def _spherical_jn(x: jax.Array, ell_max: int) -> jax.Array:
     magnitude = jnp.abs(x)
-    # Keep unselected branches finite too, including under jit/vmap.
-    series = _series(jnp.where(magnitude < 1, x, 0.0), ell_max)
-    if ell_max == 0:
-        safe_x = jnp.maximum(magnitude, 1.0)
-        return jnp.where(magnitude < 1, series, (jnp.sin(safe_x) / safe_x)[None])
+    small = magnitude < 1
+    ascending = (~small) & (magnitude > ell_max)
+    values = jnp.zeros((ell_max + 1, *x.shape), dtype=x.dtype)
 
-    upward = _upward(jnp.maximum(magnitude, float(ell_max)), ell_max)
-    # Extra orders grow with the width of the turning region (~ell^(1/3)).
-    n_start = ell_max + ceil(32 + 8 * (ell_max + 1) ** (1 / 3))
-    downward = _downward(jnp.clip(magnitude, 1.0, float(ell_max)), ell_max, n_start)
-    values = jnp.where(magnitude > ell_max, upward, downward)
+    # Branch once per argument block, not once per element. In a homogeneous
+    # block only its required algorithm runs. Mixed blocks keep safe arguments
+    # for unselected elements, also under vmap (which can turn cond into select).
+    def unchanged(result):
+        return result
+
+    if ell_max > 0:
+        descending = (~small) & (~ascending)
+        n_start = ell_max + ceil(32 + 8 * (ell_max + 1) ** (1 / 3))
+
+        def descend(result):
+            return jnp.where(
+                descending,
+                _downward(jnp.clip(magnitude, 1.0, float(ell_max)), ell_max, n_start),
+                result,
+            )
+
+        values = jax.lax.cond(jnp.any(descending), descend, unchanged, values)
+
+    def ascend(result):
+        return jnp.where(
+            ascending,
+            _upward(jnp.maximum(magnitude, float(max(1, ell_max))), ell_max),
+            result,
+        )
+
+    def series(result):
+        return jnp.where(
+            small, _series(jnp.where(small, magnitude, 0.0), ell_max), result
+        )
+
+    values = jax.lax.cond(jnp.any(ascending), ascend, unchanged, values)
+    values = jax.lax.cond(jnp.any(small), series, unchanged, values)
     ell = jnp.arange(ell_max + 1).reshape((-1,) + (1,) * x.ndim)
     parity = jnp.where((x < 0) & (ell % 2 == 1), -1.0, 1.0)
-    return jnp.where(magnitude < 1, series, parity * values)
+    return parity * values
 
 
 @_spherical_jn.defjvp
@@ -114,7 +142,7 @@ def _spherical_jn_jvp(ell_max, primals, tangents):
     derivative = (ell * previous - (ell + 1) * extended[1:]) / (  # type:ignore
         2 * ell + 1
     )
-    return _spherical_jn(x, ell_max), derivative * x_dot
+    return extended[:-1], derivative * x_dot
 
 
 def spherical_jn(x: ArrayLike, ell_max: int) -> jax.Array:

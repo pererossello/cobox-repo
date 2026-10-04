@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 
-from ._kernels import radial_kernel
+from ._kernels import _radial_kernel
 from .windows import RadialWindow, _real_array
 
 
@@ -99,11 +99,14 @@ def angular_cl(
     k_blocks = jnp.pad(k, (0, padding), mode="edge").reshape(-1, chunk)
     w_blocks = jnp.pad(measure, (0, padding)).reshape(-1, chunk)
 
+    # Prepare radial measures once per prediction, outside the k-block scan.
+    quadratures = tuple(w.quadrature(n_r) for w in windows)
+
     def integrate_block(k_block, w_block):
         kernels = jnp.stack(
             [
-                radial_kernel(k_block, w, ell_max, transfer=t, n_r=n_r)
-                for w, t in zip(windows, transfers, strict=True)
+                _radial_kernel(k_block, r, measure, ell_max, t)
+                for (r, measure), t in zip(quadratures, transfers, strict=True)
             ]
         )
         kernels = eqx.error_if(

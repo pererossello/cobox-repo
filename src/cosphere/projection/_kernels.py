@@ -45,6 +45,11 @@ def radial_kernel(
         k, jnp.any(~jnp.isfinite(k) | (k < 0)), "k must be finite and nonnegative."
     )
     r, measure = window.quadrature(n_r)
+    return _radial_kernel(k, r, measure, ell_max, transfer)
+
+
+def _radial_kernel(k, r, measure, ell_max, transfer):
+    """Evaluate on prepared quadrature nodes; shared by kernels and spectra."""
     kr = k[..., None] * r
     t = 1.0 if transfer is None else transfer(k[..., None], r)
     t = jnp.broadcast_to(jnp.asarray(t), kr.shape)
