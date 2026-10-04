@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 
-from ._constants import H0
+from ._constants import H0, RHO_CRIT_0
 from ._utils import a_of_z, z_of_a
 
 BACKGROUND_PARAMS = ("h", "Omega_b", "Omega_cdm", "Omega_k", "w0", "wa")
@@ -52,6 +52,11 @@ class BackgroundCosmo(eqx.Module):
     @property
     def omega_k(self) -> float:
         return self.Omega_k * self.h**2
+
+    @property
+    def rho_m(self) -> float:
+        """Comoving mean matter density Omega_m rho_crit,0, in (M_sun/h) / (Mpc/h)^3."""
+        return self.Omega_m * RHO_CRIT_0
 
     @property
     def is_flat(self) -> jax.Array:
@@ -213,6 +218,18 @@ class BackgroundCosmo(eqx.Module):
         from . import _distances
 
         return _distances.S_k(self, chi)
+
+    # -----------------------
+    # --- LAGRANGIAN MASS ---
+    # -----------------------
+
+    def M_of_R_lag(self, R: ArrayLike) -> jax.Array:
+        """Mass [M_sun/h] in a comoving sphere of Lagrangian radius R [Mpc/h]."""
+        return 4.0 / 3.0 * jnp.pi * self.rho_m * jnp.asarray(R) ** 3
+
+    def R_lag_of_M(self, M: ArrayLike) -> jax.Array:
+        """Lagrangian radius [Mpc/h] of a comoving sphere of mass M [M_sun/h]."""
+        return (3.0 * jnp.asarray(M) / (4.0 * jnp.pi * self.rho_m)) ** (1.0 / 3.0)
 
     def to_dict(self) -> dict:
         """Serialize scalar parameters on the host, outside JAX transformations."""
