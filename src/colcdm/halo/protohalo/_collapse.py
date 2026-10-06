@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 
-from ..cosmology.background import BackgroundCosmo
+from ...cosmology.background import BackgroundCosmo
 from ._patches import Patch
 
 if TYPE_CHECKING:

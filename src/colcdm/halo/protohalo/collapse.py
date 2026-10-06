@@ -4,7 +4,7 @@ import equinox as eqx
 import jax
 from jax.typing import ArrayLike
 
-from ..cosmology.background import BackgroundCosmo
+from ...cosmology.background import BackgroundCosmo
 from ._collapse import (
     COLLAPSE_DISPATCH,
     COLLAPSE_KINDS,

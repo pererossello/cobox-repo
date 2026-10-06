@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..window import Window
+from ._validate import normalize_support
 from .vector import VectorField
 from .tensor import TensorField
 from .ops import arithmetic
@@ -24,24 +25,54 @@ from .ops.interpolation import (
 )
 
 if TYPE_CHECKING:
-    from ..box import Box
+    from .stats._accessor import StatsAccessor
+    from ..box import Box, ModeMask, ModeSupport
 
 
 class ScalarField(eqx.Module):
     data: jax.Array
     box: "Box" = eqx.field(static=True)
     has_hat: bool = eqx.field(static=True, default=False)
+    support: Optional["ModeSupport"] = eqx.field(static=True, default=None)
 
     def __init__(
         self,
         data: jax.Array,
         box: "Box",
         has_hat: bool = False,
+        support: int | Optional["ModeSupport"] = None,
     ):
         self.data = data
         self.box = box
         self.has_hat = has_hat
+        self.support = normalize_support(support, box)
         self._validate_inputs()
+
+    # ---------------
+    # --- SUPPORT ---
+    # ---------------
+
+    def with_support(self, support: int | Optional["ModeSupport"]) -> "ScalarField":
+        """Declare the band limit of this field (trusted, not checked)."""
+        return replace(self, support=support)
+
+    def resample(self, N: int) -> "ScalarField":
+        """Fourier crop or zero-pad onto an N grid; exact if the support fits."""
+        from .ops.modes import resample
+
+        return resample(self, N)
+
+    def restrict(self, mask: "ModeMask") -> "ScalarField":
+        """Zero the modes outside mask (Fourier space); the support tightens."""
+        from .ops.modes import restrict
+
+        return restrict(self, mask)
+
+    def drop_corner_modes(self) -> "ScalarField":
+        """Keep only |k_idx| < N/2: drops the Nyquist planes and the cube corners."""
+        from ..box import IsoModeMask
+
+        return self.restrict(IsoModeMask("nyquist_open"))
 
     # ---------------
     # --- FOURIER ---
@@ -124,6 +155,7 @@ class ScalarField(eqx.Module):
             data=data,
             box=f.box,
             has_hat=True,
+            support=f.support,
         )
 
     def hessian(
@@ -143,6 +175,7 @@ class ScalarField(eqx.Module):
             box=f.box,
             has_hat=True,
             symmetry="symmetric",
+            support=f.support,
         )
 
     def laplacian(
@@ -181,7 +214,6 @@ class ScalarField(eqx.Module):
         self,
         *,
         dealias: bool = False,
-        N_iso: int | None = None,
         out_N: field_product.OutputN = None,
         return_hat: bool = False,
     ) -> "ScalarField":
@@ -194,7 +226,6 @@ class ScalarField(eqx.Module):
         return tidal.trace_of_product(
             tidal,
             dealias=dealias,
-            N_iso=None if N_iso is None else (N_iso, N_iso),
             out_N=out_N,
             return_hat=return_hat,
         )
@@ -208,7 +239,6 @@ class ScalarField(eqx.Module):
         other: "ScalarField",
         *,
         dealias: bool = False,
-        N_iso: tuple[int, int] | None = None,
         out_N: field_product.OutputN = None,
         return_hat: bool | None = None,
     ) -> "ScalarField":
@@ -217,7 +247,6 @@ class ScalarField(eqx.Module):
             self,
             other,
             dealias=dealias,
-            N_iso=N_iso,
             out_N=out_N,
             return_hat=return_hat,
         )
@@ -228,7 +257,6 @@ class ScalarField(eqx.Module):
         third: "ScalarField",
         *,
         dealias: bool = False,
-        N_iso: tuple[int, int, int] | None = None,
         out_N: field_product.OutputN = None,
         return_hat: bool | None = None,
     ) -> "ScalarField":
@@ -238,7 +266,6 @@ class ScalarField(eqx.Module):
             second,
             third,
             dealias=dealias,
-            N_iso=N_iso,
             out_N=out_N,
             return_hat=return_hat,
         )
@@ -247,7 +274,6 @@ class ScalarField(eqx.Module):
         self,
         *,
         dealias: bool = False,
-        N_iso: int | None = None,
         out_N: field_product.OutputN = None,
         return_hat: bool | None = None,
     ) -> "ScalarField":
@@ -255,7 +281,6 @@ class ScalarField(eqx.Module):
         return field_product.square(
             self,
             dealias=dealias,
-            N_iso=N_iso,
             out_N=out_N,
             return_hat=return_hat,
         )
@@ -264,7 +289,6 @@ class ScalarField(eqx.Module):
         self,
         *,
         dealias: bool = False,
-        N_iso: int | None = None,
         out_N: field_product.OutputN = None,
         return_hat: bool | None = None,
     ) -> "ScalarField":
@@ -272,7 +296,6 @@ class ScalarField(eqx.Module):
         return field_product.cube(
             self,
             dealias=dealias,
-            N_iso=N_iso,
             out_N=out_N,
             return_hat=return_hat,
         )
@@ -308,6 +331,13 @@ class ScalarField(eqx.Module):
     def __rtruediv__(self, other):
         raise TypeError("c / field is not supported.")
 
+    @property
+    def stats(self) -> "StatsAccessor":
+        """Stateless shortcuts to cobox.field.stats estimators."""
+        from .stats._accessor import StatsAccessor
+
+        return StatsAccessor(self)
+
     # ---------------------
     # --- ARRAY SURFACE ---
     # ---------------------
@@ -326,15 +356,18 @@ class ScalarField(eqx.Module):
     def ndim(self):
         return self.data.ndim
 
-    def __array__(self):
-        return np.asarray(self.data)
+    def __array__(self, dtype=None, copy=None):
+        return np.asarray(self.data, dtype=dtype, copy=copy)
 
     def __getitem__(self, idx):
         return self.data[idx]
 
     def __repr__(self):
         space = "fourier space" if self.has_hat else "real space"
-        return f"Field(shape={self.shape}, {space}, box={self.box!r})"
+        return (
+            f"ScalarField(shape={self.shape}, {space}, box={self.box!r}, "
+            f"support={self.support!r})"
+        )
 
     # -----------
     # --- I/O ---
@@ -342,16 +375,16 @@ class ScalarField(eqx.Module):
 
     def to_h5(self, path) -> None:
         """Write this field (data + static config) to an HDF5 file."""
-        from ._io import save_scalar_field
+        from ._io import save_field
 
-        save_scalar_field(self, path)
+        save_field(self, path)
 
     @classmethod
     def from_h5(cls, path) -> "ScalarField":
         """Load a ScalarField from HDF5 (inverse of ``to_h5``)."""
-        from ._io import load_scalar_field
+        from ._io import load_field
 
-        return load_scalar_field(path)
+        return load_field(path, cls)
 
     # ------------
     # --- PLOT ---

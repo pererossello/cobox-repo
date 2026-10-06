@@ -55,6 +55,7 @@ def psi_3c(m1: TensorField, m2: TensorField) -> VectorField:
             data=jnp.stack([component(t, i, j).data for j in range(3)]),
             box=t.box,
             has_hat=t.has_hat,
+            support=t.support,
         )
 
     terms = [

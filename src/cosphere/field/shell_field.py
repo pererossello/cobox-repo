@@ -47,6 +47,17 @@ class ShellField(eqx.Module):
         data_isht = self.shell.isht(self.data)
         return replace(self, data=data_isht, has_hat=False)
 
+    def filter_ell(self, response, *, iter: int = 3) -> "ShellField":
+        """Multiply a_lm by a real finite scalar, (L,) array or callable of ell.
+
+        Returns a harmonic field. Pixel inputs are transformed with sht(iter);
+        call .isht() on the result to obtain a pixel map. This isotropic filter
+        preserves real-map symmetry; it is not a spatial mask.
+        """
+        from .ops.filtering import filter_ell
+
+        return filter_ell(self, response, iter=iter)
+
     # ------------------------
     # --- BASIC ARITHMETIC ---
     # ------------------------
@@ -103,8 +114,8 @@ class ShellField(eqx.Module):
     def ndim(self):
         return self.data.ndim
 
-    def __array__(self):
-        return np.asarray(self.data)
+    def __array__(self, dtype=None, copy=None):
+        return np.asarray(self.data, dtype=dtype, copy=copy)
 
     def __getitem__(self, idx):
         return self.data[idx]

@@ -2,29 +2,27 @@
 
 from math import ceil, exp, log
 
-from cobox.box import Box
-from cobox.field.ops.field_product import _input_mode_bounds
+from cobox.box import Box, ModeSupport
 
 
 def resolve_radii(
     box: Box,
-    N_iso: int | None,
+    support: ModeSupport | None,
     *,
     dlnR: float,
     R_min_factor: float,
     R_max: float | None,
 ) -> tuple[float, ...]:
-    """Log-spaced radii from R_max down to R_min = R_min_factor * L / N_iso.
+    """Log-spaced radii from R_max down to R_min = R_min_factor * L / N_eff.
 
-    N_iso is the declared support |k_idx| < N_iso / 2 of the field; None uses
-    box.N. Below ~L / N_iso the sphere average no longer depends on R, so the
-    field, not the grid, sets R_min. R_max=None uses L / 4, also the upper
-    bound: larger spheres overlap their own periodic images. Both ends are
-    included and the step in ln R is at most dlnR.
+    N_eff is the smallest grid holding the field's declared support
+    (support.N_min), or box.N without one. Below ~L / N_eff the sphere average
+    no longer depends on R, so the field, not the grid, sets R_min.
+    R_max=None uses L / 4, also the upper bound: larger spheres overlap their
+    own periodic images. Both ends are included and the step in ln R is at
+    most dlnR.
     """
-    if N_iso is not None:
-        _input_mode_bounds(box, (N_iso,), 1)  # validation only
-    N_eff = box.N if N_iso is None else int(N_iso)
+    N_eff = box.N if support is None else support.N_min
     R_min = R_min_factor * box.L / N_eff
     R_max = 0.25 * box.L if R_max is None else float(R_max)
     if R_max > 0.25 * box.L:

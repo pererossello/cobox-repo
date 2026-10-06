@@ -10,7 +10,7 @@ import jax.numpy as jnp
 from jax.typing import ArrayLike
 
 from cobox.field import ScalarField
-from cobox.field.ops.field_product import OutputN
+from cobox.field.ops._grids import OutputN
 
 from ..cosmology._constants import C_LIGHT
 from ..growth import Growth
@@ -55,17 +55,17 @@ class LPT(eqx.Module):
     def __check_init__(self):
         self._validate()
 
-    def basis(self, delta0: ScalarField, *, N_iso: int | None = None) -> LPTBasis:
+    def basis(self, delta0: ScalarField) -> LPTBasis:
         """Build the shapes for delta0, in Fourier space.
 
-        N_iso declares |k_idx| < N_iso/2; it does not filter the input.
+        Dealiasing sizes its working grid from delta0.support (the whole box
+        when it has none); the support is trusted, not enforced.
         """
         shapes = _build_basis(
             delta0,
             self.order,
             dealias=self.dealias,
             transverse=self.transverse,
-            N_iso=N_iso,
             out_N=self.out_N,
         )
         return LPTBasis(self, shapes)
@@ -223,9 +223,11 @@ class LPTBasis(eqx.Module):
         """Radial redshift-space displacement at a scalar or per-point a."""
         psi, dpsi_dlna = self.get_psi_and_dpsi_dlna(a, background)
         dpsi_r_dlna, n_los = get_dpsi_r_dlna_and_n_los(psi, dpsi_dlna, observer)
+        # Projection onto the nonlinear n_los: no band limit survives.
         return replace(
             psi,
             data=psi.data + dpsi_r_dlna.data[None, ...] * n_los.data,
+            support=None,
         )
 
     def get_dpsi_dlna_and_n_los(
@@ -239,7 +241,7 @@ class LPTBasis(eqx.Module):
         psi, dpsi_dlna = self.get_psi_and_dpsi_dlna(a, background)
         r_vec = psi.box.vec_from_point(observer) + psi.data
         _, n_los = get_distance_and_n_los(r_vec)
-        return dpsi_dlna, replace(psi, data=n_los)
+        return dpsi_dlna, replace(psi, data=n_los, support=None)
 
     def get_z_rsd(
         self,

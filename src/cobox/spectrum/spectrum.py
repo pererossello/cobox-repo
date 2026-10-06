@@ -25,6 +25,14 @@ class Spectrum(eqx.Module):
     def to_dict(self) -> dict:
         """Model configuration; parameters are never included."""
 
+    def bind(self, **kwargs: Any) -> eqx.Partial:
+        """This spectrum as a function of k alone, the other arguments fixed.
+
+        Arguments bind by keyword, e.g. power.bind(a=1.0, cosmology=cosmo).
+        The result is a PyTree, so bound parameters stay traceable under jit.
+        """
+        return eqx.Partial(self, **kwargs)
+
     def integrate(
         self,
         *args,
@@ -35,14 +43,30 @@ class Spectrum(eqx.Module):
     ) -> jax.Array:
         """int f(k) w(k) dln k on a log grid in k.
 
-        weight(k) receives the 1D grid and may return extra trailing axes.
+        The spectrum and weight(k) may return a scalar or an array with
+        leading axis n_k. Trailing batch axes broadcast against one another
+        (right-aligned); the k axis is never treated as a batch axis.
         """
         lnk = jnp.linspace(jnp.log(k_min), jnp.log(k_max), n_k)
         k = jnp.exp(lnk)
-        values = self(k, *args)
+        values = jnp.asarray(self(k, *args))
+        if values.ndim == 0:
+            values = jnp.broadcast_to(values, k.shape)
+        elif values.shape[0] != n_k:
+            raise ValueError("spectrum must be scalar or have leading axis n_k.")
         if weight is not None:
-            w = weight(k)
-            values = values.reshape((-1,) + (1,) * (w.ndim - 1)) * w
+            w = jnp.asarray(weight(k))
+            if w.ndim == 0:
+                values = values * w
+            else:
+                if w.shape[0] != n_k:
+                    raise ValueError("weight must be scalar or have leading axis n_k.")
+                ndim = max(values.ndim, w.ndim)
+                values = values.reshape(
+                    (n_k,) + (1,) * (ndim - values.ndim) + values.shape[1:]
+                )
+                w = w.reshape((n_k,) + (1,) * (ndim - w.ndim) + w.shape[1:])
+                values = values * w
         return jnp.trapezoid(values, lnk, axis=0)
 
     def plot(self, k: ArrayLike, *args, ax=None, **kwargs):

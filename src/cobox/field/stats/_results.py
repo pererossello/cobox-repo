@@ -77,7 +77,7 @@ def stack(results: Sequence[R]) -> R:
     """Mean over realizations, same type as the inputs.
 
     Binned results gain ``scatter`` (std across the inputs). Bundles such as
-    CrossSpectrum stack their components, so derived quantities are
+    CrossSpectrumEstimate stack their components, so derived quantities are
     computed from the stacked data.
     """
     if not results:

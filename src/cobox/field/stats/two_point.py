@@ -1,5 +1,5 @@
 """Two-point statistics. One primitive, ``mode_power(a, b)``, reduced over
-|k| bins; auto spectra are the ``b=None`` case, and ``CrossSpectrum`` is a
+|k| bins; auto spectra are the ``b=None`` case, and ``CrossSpectrumEstimate`` is a
 bundle of three spectra with r, T, and error power derived from them.
 """
 
@@ -30,7 +30,7 @@ CrossPlotLiteral = Literal["r", "transfer", "error_power", "spectra"]
 
 
 @dataclass(frozen=True, eq=False, kw_only=True)
-class PowerSpectrum(Binned):
+class PowerSpectrumEstimate(Binned):
     """Binned auto or cross power spectrum, shot noise already subtracted."""
 
     cross: bool = False
@@ -45,9 +45,9 @@ class PowerSpectrum(Binned):
     def gaussian_error(self) -> jax.Array:
         """Per-realization cosmic-variance error of an auto spectrum,
         (P + N) sqrt(2 / counts); counts / 2 modes are independent.
-        Cross spectra: use ``CrossSpectrum.ab_error``."""
+        Cross spectra: use ``CrossSpectrumEstimate.ab_error``."""
         if self.cross:
-            raise ValueError("use CrossSpectrum.ab_error for cross spectra.")
+            raise ValueError("use CrossSpectrumEstimate.ab_error for cross spectra.")
         return (self.values + self.shot_noise) * jnp.sqrt(2.0 / self.counts)
 
     def plot(
@@ -76,12 +76,12 @@ class PowerSpectrum(Binned):
 
 
 @dataclass(frozen=True, eq=False)
-class CrossSpectrum:
+class CrossSpectrumEstimate:
     """P_aa, P_bb, P_ab on shared bins; everything else is derived."""
 
-    aa: PowerSpectrum
-    bb: PowerSpectrum
-    ab: PowerSpectrum
+    aa: PowerSpectrumEstimate
+    bb: PowerSpectrumEstimate
+    ab: PowerSpectrumEstimate
 
     def __post_init__(self):
         self.aa.check_compatible(self.bb)
@@ -162,7 +162,7 @@ class CrossSpectrum:
     # --- stacking ---
 
     @classmethod
-    def _stack(cls, results: Sequence["CrossSpectrum"]) -> "CrossSpectrum":
+    def _stack(cls, results: Sequence["CrossSpectrumEstimate"]) -> "CrossSpectrumEstimate":
         return cls(
             aa=stack([c.aa for c in results]),
             bb=stack([c.bb for c in results]),
@@ -214,7 +214,7 @@ def power_spectrum(
     *,
     bins: BinsArg = 30,
     shot_noise: float = 0.0,
-) -> PowerSpectrum:
+) -> PowerSpectrumEstimate:
     """Binned P_ab(k); the auto spectrum when ``b`` is None.
 
     ``bins`` is a KBins (share it across results) or an int (log bins).
@@ -223,7 +223,7 @@ def power_spectrum(
     """
     bins = _resolve_bins(bins, a.box)
     values, counts, k_eff = bin_average(mode_power(a, b), bins, a.box)
-    return PowerSpectrum(
+    return PowerSpectrumEstimate(
         bins=bins,
         values=values - shot_noise,
         counts=counts,
@@ -240,13 +240,13 @@ def cross_spectrum(
     *,
     bins: BinsArg = 30,
     shot_noise: tuple[float, float, float] = (0.0, 0.0, 0.0),
-) -> CrossSpectrum:
+) -> CrossSpectrumEstimate:
     """P_aa, P_bb, P_ab on shared bins. ``shot_noise = (N_aa, N_bb, N_ab)``;
     N_ab is nonzero only when a and b share the same discrete tracers."""
     a, b = a.fft(), b.fft()  # FFT once; the three spectra reuse it
     bins = _resolve_bins(bins, a.box)
     n_aa, n_bb, n_ab = shot_noise
-    return CrossSpectrum(
+    return CrossSpectrumEstimate(
         aa=power_spectrum(a, bins=bins, shot_noise=n_aa),
         bb=power_spectrum(b, bins=bins, shot_noise=n_bb),
         ab=power_spectrum(a, b, bins=bins, shot_noise=n_ab),

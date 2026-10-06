@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from ...box.support import ModeSupport
+
 if TYPE_CHECKING:
     from ..scalar import ScalarField
     from ..vector import VectorField
@@ -46,7 +48,11 @@ def _additive_scalar_field(this: "ScalarField", that, op) -> "ScalarField":
         if this.has_hat != that.has_hat:
             raise ValueError("has_hat mismatch; align with .fft()/.ifft().")
 
-        return replace(this, data=op(this.data, that.data))
+        return replace(
+            this,
+            data=op(this.data, that.data),
+            support=ModeSupport.of_sum(this.support, that.support),
+        )
 
     if _is_number(that):
         if this.has_hat:
@@ -119,7 +125,11 @@ def _additive_vector_field(this: "VectorField", that, op) -> "VectorField":
             raise ValueError("VectorFields live on different boxes.")
         if this.has_hat != that.has_hat:
             raise ValueError("has_hat mismatch; align with .fft()/.ifft().")
-        return replace(this, data=op(this.data, that.data))
+        return replace(
+            this,
+            data=op(this.data, that.data),
+            support=ModeSupport.of_sum(this.support, that.support),
+        )
 
     if _is_number(that):
         raise TypeError(

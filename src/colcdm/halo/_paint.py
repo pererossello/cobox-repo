@@ -1,5 +1,5 @@
-"""Paint a slab of a ProtohaloCatalog: centres (scatter) or Lagrangian spheres
-(circles). Returns a PaintResult."""
+"""Paint a slab of a protohalo or halo catalogue: positions (scatter) or
+Lagrangian spheres (circles). Returns a PaintResult."""
 
 from __future__ import annotations
 
@@ -15,23 +15,23 @@ if TYPE_CHECKING:
     from cobox.box import Box
 
     from ..cosmology.background import BackgroundCosmo
-    from .catalog import ProtohaloCatalog
+    from .catalog import _AbstractCatalog
 
 StyleLiteral = Literal["scatter", "circles"]
 ColorKey = str | np.ndarray | None
 
 
-def _resolve_color(c: ColorKey, catalog: ProtohaloCatalog, axis: int):
+def _resolve_color(c: ColorKey, catalog: _AbstractCatalog, axis: int):
     """Returns (color_value, is_scalar); is_scalar gates whether a colorbar applies."""
     if c is None:
         return None, False
     if isinstance(c, str):
         if c == "depth":
-            return np.asarray(catalog.q[axis]), True
+            return np.asarray(catalog.positions[axis]), True
         if c == "M":
             return np.log10(np.asarray(catalog.M)), True
         if c == "a":
-            return np.asarray(catalog.a), True
+            return np.broadcast_to(np.asarray(catalog.a), (len(catalog),)), True
     if hasattr(c, "shape"):
         return np.asarray(c), True
     return c, False
@@ -44,7 +44,7 @@ def _slab_distance(x: np.ndarray, lo: float, hi: float, L: float) -> np.ndarray:
 
 
 def paint(
-    catalog: ProtohaloCatalog,
+    catalog: _AbstractCatalog,
     box: Box,
     background: BackgroundCosmo | None = None,
     ax: Axes | None = None,
@@ -64,22 +64,22 @@ def paint(
     figsize: tuple = (5.5, 4.5),
     **kwargs,
 ) -> PaintResult:
-    """Paint the protohalos of a slab along ``axis`` on the two remaining axes.
+    """Paint the objects of a slab along ``axis`` on the two remaining axes.
 
     ``slab`` is ``(lo, hi)`` in ``[0, box.N]`` node units by default (pass
     ``units=True`` for Mpc/h); ``None`` keeps the whole box. ``style``:
-    ``"scatter"`` marks the centres inside the slab; ``"circles"`` draws each
+    ``"scatter"`` marks the positions inside the slab; ``"circles"`` draws each
     Lagrangian sphere that reaches the slab, cut where it is widest, and needs
     ``background`` (for R(M)). A plane, ``lo == hi``, is a valid slab.
     ``c`` accepts ``None``, ``"depth"`` (slab-axis coordinate), ``"M"``
-    (log10 mass), ``"a"``, a per-protohalo array, or any matplotlib colour.
+    (log10 mass), ``"a"``, a per-object array, or any matplotlib colour.
     Extra kwargs go to ``ax.scatter`` or the circles' ``PatchCollection``.
     """
     import matplotlib.pyplot as plt
     from matplotlib.collections import PatchCollection
     from matplotlib.patches import Circle
 
-    if box.D != 3 or catalog.q.shape[0] != 3:
+    if box.D != 3 or catalog.positions.shape[0] != 3:
         raise ValueError("paint requires a 3D catalog and box.")
     if axis not in (0, 1, 2):
         raise ValueError(f"axis must be 0, 1, or 2; got {axis}.")
@@ -102,7 +102,7 @@ def paint(
         if not units:
             lo, hi = lo * box.R, hi * box.R
 
-    q = np.asarray(catalog.q) % L
+    q = np.asarray(catalog.positions) % L
     rem = [a for a in range(3) if a != axis]
     c_arr, has_scalar_c = _resolve_color(c, catalog, axis)
 
@@ -138,8 +138,8 @@ def paint(
 
     ax.set_xlim(0.0, L)
     ax.set_ylim(0.0, L)
-    ax.set_xlabel(f"q{rem[0]}")
-    ax.set_ylabel(f"q{rem[1]}")
+    ax.set_xlabel(f"{catalog.COORD}{rem[0]}")
+    ax.set_ylabel(f"{catalog.COORD}{rem[1]}")
     ax.set_aspect("equal")
 
     if colorbar and has_scalar_c:

@@ -20,7 +20,7 @@ from . import one_point, two_point
 if TYPE_CHECKING:
     from ..scalar import ScalarField
     from .one_point import PDF, Moments
-    from .two_point import BinsArg, CrossSpectrum, PowerSpectrum
+    from .two_point import BinsArg, CrossSpectrumEstimate, PowerSpectrumEstimate
 
 
 class StatsAccessor:
@@ -39,7 +39,7 @@ class StatsAccessor:
         *,
         bins: "BinsArg" = 30,
         shot_noise: float = 0.0,
-    ) -> "PowerSpectrum":
+    ) -> "PowerSpectrumEstimate":
         return two_point.power_spectrum(
             self._field, other, bins=bins, shot_noise=shot_noise
         )
@@ -50,7 +50,7 @@ class StatsAccessor:
         *,
         bins: "BinsArg" = 30,
         shot_noise: tuple[float, float, float] = (0.0, 0.0, 0.0),
-    ) -> "CrossSpectrum":
+    ) -> "CrossSpectrumEstimate":
         return two_point.cross_spectrum(
             self._field, other, bins=bins, shot_noise=shot_noise
         )

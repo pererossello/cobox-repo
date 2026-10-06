@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from abc import abstractmethod
+from math import isqrt
 from typing import Literal, Optional, TYPE_CHECKING
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+
+from .support import ModeSupport
 
 if TYPE_CHECKING:
     from .box import Box
@@ -18,7 +22,19 @@ IsoModeMaskLiteral = Literal["nyquist_open", "nyquist_closed", "custom"]
 # ---------------------
 
 
-class IsoModeMask(eqx.Module):
+class ModeMask(eqx.Module):
+    """Fourier selection and an optional guaranteed per-axis support bound."""
+
+    @abstractmethod
+    def mask(self, box: "Box") -> jax.Array:
+        """Boolean selection with shape box.KSHAPE."""
+
+    def support(self, box: "Box") -> Optional[ModeSupport]:
+        """None unless this restriction guarantees a tighter grid bound."""
+        return None
+
+
+class IsoModeMask(ModeMask):
     """Isotropic ``|k|`` cut.
 
     - ``nyquist_open``:   ``|k_idx|^2 <  (N/2)^2``  (drops the Nyquist corner)
@@ -53,8 +69,13 @@ class IsoModeMask(eqx.Module):
             k = box.k
             return (k >= k_lo) & (k < k_hi)
 
-    def N_iso(self, box: "Box") -> Optional[int]:
-        """Smallest N_iso with every kept mode at |k_idx| < N_iso / 2."""
+    def support(self, box: "Box") -> Optional[ModeSupport]:
+        """Tightest ModeSupport of the kept modes on box, or None.
+
+        A kept mode has |k_idx|^2 <= n2_max, so each coordinate is at most
+        isqrt(n2_max), which some kept mode on an axis attains. None when
+        there is no upper cut or the cut does not fall below the box's Nyquist.
+        """
         if self.mode == "nyquist_open":
             n2_max = (box.N // 2) ** 2 - 1
         elif self.mode == "nyquist_closed":
@@ -64,9 +85,9 @@ class IsoModeMask(eqx.Module):
             k_hi = self.k_range[1]
             if k_hi is None:
                 return None
+            # Inflated so float rounding at a shell edge stays conservative.
             n2_max = int((float(k_hi) / box.K_RES) ** 2 * (1 + 1e-6))
-        n_iso = int((4 * n2_max) ** 0.5) + 1
-        return n_iso if n_iso <= box.N else None
+        return ModeSupport(isqrt(n2_max)).on(box)
 
     def _validate(self) -> None:
         if self.mode not in ("nyquist_open", "nyquist_closed", "custom"):
@@ -131,8 +152,7 @@ class IsoModeMask(eqx.Module):
 # ---------------------
 
 
-class BoxModeMask(eqx.Module):
-
+class BoxModeMask(ModeMask):
     boxes: tuple[tuple[int, int], ...] = eqx.field(static=True)
     insides: tuple[bool, ...] = eqx.field(static=True)
 
@@ -152,6 +172,22 @@ class BoxModeMask(eqx.Module):
             sub = self._single_box_mask(box, N_p, ratio)
             m = m & (sub if inside else ~sub)
         return m
+
+    def support(self, box: "Box") -> Optional[ModeSupport]:
+        """Conservative bound from the intersection of interior selections.
+
+        Multiples of ratio on the compressed axis include its upper boundary,
+        giving ratio * floor(N_p/2). The other axes use strict boundaries and
+        cannot exceed it. Exterior selections do not supply an upper bound;
+        their intersection can only remove modes from an interior selection.
+        """
+        self._validate_against_box(box)
+        bounds = [
+            ratio * (N_p // 2)
+            for (N_p, ratio), inside in zip(self.boxes, self.insides)
+            if inside
+        ]
+        return ModeSupport(min(bounds)).on(box) if bounds else None
 
     @staticmethod
     def _single_box_mask(box: "Box", N_p: int, ratio: int) -> jax.Array:

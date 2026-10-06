@@ -1,13 +1,34 @@
 from __future__ import annotations
 
+from numbers import Integral
 from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
 if TYPE_CHECKING:
+    from ..box import Box, ModeSupport
     from .scalar import ScalarField
     from .vector import VectorField
     from .tensor import TensorField
+
+
+def normalize_support(
+    support: int | ModeSupport | None, box: Box
+) -> ModeSupport | None:
+    """Coerce a declared support (an int bound is a ModeSupport) and normalize
+    it against the field's box."""
+    from ..box import ModeSupport
+
+    if support is None:
+        return None
+    if isinstance(support, Integral) and not isinstance(support, bool):
+        support = ModeSupport(int(support))
+    if not isinstance(support, ModeSupport):
+        raise TypeError(
+            "support must be an int bound, a ModeSupport or None; "
+            f"got {type(support).__name__}."
+        )
+    return support.on(box)
 
 
 def validate_field_common(field: ScalarField | VectorField | TensorField) -> None:
@@ -46,6 +67,8 @@ def validate_vector_field(field: "VectorField") -> None:
 def validate_tensor_field(field: "TensorField") -> None:
     from .tensor import SYMMETRIES
 
+    validate_field_common(field)
+
     b = field.box
     if field.symmetry not in (None,) + SYMMETRIES:
         raise ValueError(
@@ -66,6 +89,3 @@ def validate_tensor_field(field: "TensorField") -> None:
             f"expected (n_components={field.n_components}, *box_shape) = "
             f"{expected!r}."
         )
-
-    if not field.has_hat and jnp.iscomplexobj(field.data):
-        raise ValueError("complex data provided in real-space")

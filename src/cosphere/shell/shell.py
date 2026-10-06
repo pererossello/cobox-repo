@@ -9,8 +9,8 @@ from jax.typing import ArrayLike
 class Shell(eqx.Module):
     """HEALPix pixelization of the unit sphere, RING ordering, band-limited to ell < L.
 
-    L defaults to 2 nside: above that HEALPix cannot resolve the modes and
-    transforms of fields with power there do not converge (healpy's
+    L defaults to the conservative band limit 2 nside. HEALPix transforms
+    are approximate; higher band limits require convergence checks (healpy's
     lmax = 3 nside - 1 is L = 3 nside). Harmonic coefficients of real fields
     are stored on the (L, L) half-plane m >= 0, indexed [ell, m]; entries
     with m > ell are not modes and stay zero.

@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..window import Window
+from ._validate import normalize_support
 
 from .ops import field_product
 from .ops import arithmetic
@@ -21,7 +22,7 @@ from .ops.interpolation import (
 )
 
 if TYPE_CHECKING:
-    from ..box import Box
+    from ..box import Box, ModeMask, ModeSupport
     from .scalar import ScalarField
     from .tensor import TensorField
 
@@ -30,17 +31,46 @@ class VectorField(eqx.Module):
     data: jax.Array
     box: "Box" = eqx.field(static=True)
     has_hat: bool = eqx.field(static=True, default=False)
+    support: Optional["ModeSupport"] = eqx.field(static=True, default=None)
 
     def __init__(
         self,
         data: jax.Array,
         box: "Box",
         has_hat: bool = False,
+        support: int | Optional["ModeSupport"] = None,
     ):
         self.data = data
         self.box = box
         self.has_hat = has_hat
+        self.support = normalize_support(support, box)
         self._validate_inputs()
+
+    # ---------------
+    # --- SUPPORT ---
+    # ---------------
+
+    def with_support(self, support: int | Optional["ModeSupport"]) -> "VectorField":
+        """Declare the band limit shared by all components (trusted, not checked)."""
+        return replace(self, support=support)
+
+    def resample(self, N: int) -> "VectorField":
+        """Fourier crop or zero-pad onto an N grid; exact if the support fits."""
+        from .ops.modes import resample
+
+        return resample(self, N)
+
+    def restrict(self, mask: "ModeMask") -> "VectorField":
+        """Zero the modes outside mask (Fourier space); the support tightens."""
+        from .ops.modes import restrict
+
+        return restrict(self, mask)
+
+    def drop_corner_modes(self) -> "VectorField":
+        """Keep only |k_idx| < N/2: drops the Nyquist planes and the cube corners."""
+        from ..box import IsoModeMask
+
+        return self.restrict(IsoModeMask("nyquist_open"))
 
     # -----------
     # --- FFT ---
@@ -74,6 +104,7 @@ class VectorField(eqx.Module):
             data=self.data[axis],
             box=self.box,
             has_hat=self.has_hat,
+            support=self.support,
         )
 
     # --------------------
@@ -120,6 +151,7 @@ class VectorField(eqx.Module):
             data=data,
             box=v.box,
             has_hat=True,
+            support=v.support,
         )
 
     def curl(
@@ -164,6 +196,7 @@ class VectorField(eqx.Module):
             box=v.box,
             has_hat=True,
             symmetry="symmetric" if claim_symmetric else None,
+            support=v.support,
         )
 
     # ----------------------------------------
@@ -189,7 +222,6 @@ class VectorField(eqx.Module):
         other: "VectorField",
         *,
         dealias: bool = False,
-        N_iso: tuple[int, int] | None = None,
         out_N: field_product.OutputN = None,
         return_hat: bool | None = None,
     ) -> "ScalarField":
@@ -200,7 +232,6 @@ class VectorField(eqx.Module):
             self,
             other,
             dealias=dealias,
-            N_iso=N_iso,
             out_N=out_N,
             return_hat=return_hat,
         )
@@ -210,7 +241,6 @@ class VectorField(eqx.Module):
         other: "VectorField",
         *,
         dealias: bool = False,
-        N_iso: tuple[int, int] | None = None,
         out_N: field_product.OutputN = None,
         return_hat: bool | None = None,
     ) -> "ScalarField | VectorField":
@@ -221,7 +251,6 @@ class VectorField(eqx.Module):
             self,
             other,
             dealias=dealias,
-            N_iso=N_iso,
             out_N=out_N,
             return_hat=return_hat,
         )
@@ -275,15 +304,18 @@ class VectorField(eqx.Module):
     def ndim(self):
         return self.data.ndim
 
-    def __array__(self):
-        return np.asarray(self.data)
+    def __array__(self, dtype=None, copy=None):
+        return np.asarray(self.data, dtype=dtype, copy=copy)
 
     def __getitem__(self, idx):
         return self.data[idx]
 
     def __repr__(self):
         space = "fourier space" if self.has_hat else "real space"
-        return f"VecField(shape={self.shape}, {space}, " f"box={self.box!r})"
+        return (
+            f"VectorField(shape={self.shape}, {space}, box={self.box!r}, "
+            f"support={self.support!r})"
+        )
 
     # -----------
     # --- I/O ---
@@ -291,16 +323,16 @@ class VectorField(eqx.Module):
 
     def to_h5(self, path) -> None:
         """Write this field (data + static config) to an HDF5 file."""
-        from ._io import save_vector_field
+        from ._io import save_field
 
-        save_vector_field(self, path)
+        save_field(self, path)
 
     @classmethod
     def from_h5(cls, path) -> "VectorField":
         """Load a VectorField from HDF5 (inverse of ``to_h5``)."""
-        from ._io import load_vector_field
+        from ._io import load_field
 
-        return load_vector_field(path)
+        return load_field(path, cls)
 
     # ------------------
     # --- VALIDATION ---

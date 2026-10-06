@@ -17,7 +17,7 @@ def _import_s2fft():
         import s2fft
     except ImportError as e:
         raise ImportError(
-            "Shell.sht / Shell.isht need s2fft; install it with `pip install s2fft`."
+            "Shell.sht / Shell.isht need s2fft; install it with `pip install 'cobox[sphere]'`."
         ) from e
     return s2fft
 
@@ -36,24 +36,29 @@ def full_to_half(flm: jax.Array, L: int) -> jax.Array:
 def sht(f: jax.Array, nside: int, L: int, iter: int) -> jax.Array:
     """Real HEALPix map (NPIX,) -> half-plane (L, L), f_lm = int f Y*_lm dOmega."""
     s2fft = _import_s2fft()
+    # s2fft's HEALPix FFT requires L >= 2*nside, independently of the
+    # requested output band limit. Work at that minimum, then truncate.
+    work_L = max(L, 2 * nside)
     flm = s2fft.forward(
         f,  # type: ignore
-        L=L,
+        L=work_L,
         nside=nside,
         sampling="healpix",
         method="jax",
         reality=True,
         iter=iter,
     )
-    return full_to_half(flm, L)  # type: ignore
+    return full_to_half(flm, work_L)[:L, :L]  # type: ignore
 
 
 def isht(flm: jax.Array, nside: int, L: int) -> jax.Array:
     """Half-plane (L, L) -> real HEALPix map (NPIX,)."""
     s2fft = _import_s2fft()
+    work_L = max(L, 2 * nside)
+    flm = jnp.pad(flm, ((0, work_L - L), (0, work_L - L)))
     f = s2fft.inverse(
-        half_to_full(flm, L),  # type: ignore
-        L=L,
+        half_to_full(flm, work_L),  # type: ignore
+        L=work_L,
         nside=nside,
         sampling="healpix",
         method="jax",

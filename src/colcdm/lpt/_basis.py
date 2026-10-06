@@ -7,13 +7,15 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import equinox as eqx
+import jax.numpy as jnp
 from jax.typing import ArrayLike
 
-from cobox.field.ops.field_product import OutputN
+from cobox.box import ModeSupport
+from cobox.field.ops._grids import OutputN, product_grid_sizes
 
 from ._growth import SHAPE_KEYS
 from ._psi import psi_1, psi_2, psi_3a, psi_3b, psi_3c
-from ._utils import _grid_sizes, _resize_vector
+from ._utils import _resize_vector
 
 if TYPE_CHECKING:
     from cobox.field import ScalarField, VectorField
@@ -40,13 +42,22 @@ class _LPTBasis(eqx.Module):
         return self._map(lambda field: field.ifft())
 
     def _combine(self, weights: Mapping[str, ArrayLike]) -> VectorField:
-        """sum_n w_n S_n, in the basis space."""
-        data = sum(
-            field.data * weights[key]
+        """sum_n w_n S_n, in the basis space.
+
+        Scalar weights keep the largest shape support; per-point weights
+        (one time per grid point) are a pointwise product, so none survives.
+        """
+        present = [
+            (key, field)
             for key, field in zip(SHAPE_KEYS, self._fields)
             if field is not None
-        )
-        return replace(self.s_1, data=data)
+        ]
+        data = sum(field.data * weights[key] for key, field in present)
+        if any(jnp.ndim(weights[key]) > 0 for key, _ in present):
+            support = None
+        else:
+            support = ModeSupport.of_sum(*(field.support for _, field in present))
+        return replace(self.s_1, data=data, support=support)
 
     @property
     def _fields(self) -> tuple[VectorField | None, ...]:
@@ -84,14 +95,15 @@ def _build_basis(
     *,
     dealias: bool,
     transverse: bool,
-    N_iso: int | None,
     out_N: OutputN,
 ) -> _LPTBasis:
-    """Build on one working grid, then project the complete basis."""
+    """Build on one working grid sized by delta0.support, then project."""
     box = delta0.box
     if order > 1 and box.D != 3:
         raise ValueError("LPT orders above 1 require D == 3.")
-    work_N, output_N = _grid_sizes(box, order, dealias, N_iso, out_N)
+    work_N, output_N = product_grid_sizes(
+        box, (delta0.support,) * order, dealias=dealias, out_N=out_N
+    )
     work_box = box if work_N == box.N else replace(box, N=work_N)
     output_box = box if output_N == box.N else replace(box, N=output_N)
 

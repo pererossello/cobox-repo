@@ -8,32 +8,31 @@ import numpyro.distributions as dist
 
 from . import _randoms
 
-from ..box import _fourier
-from ..box.modemask import IsoModeMask
+from ..box.modemask import ModeMask
+from ..box.support import ModeSupport
 
 if TYPE_CHECKING:
     from ..box import Box
     from ..field.scalar import ScalarField
 
 KindLiteral = Literal["real", "complex"]
-ComplexBaseLiteral = Literal["cartesian", "polar", "polar_fix_amp"]
+ComplexBaseLiteral = Literal["cartesian"]
 
 
 class GRFSampler(eqx.Module):
-
     kind: KindLiteral = eqx.field(static=True)
     complex_base: Optional[ComplexBaseLiteral] = eqx.field(static=True, default=None)
-    restrictions: tuple[IsoModeMask, ...] = eqx.field(static=True, default=())
+    restrictions: tuple[ModeMask, ...] = eqx.field(static=True, default=())
 
     def __init__(
         self,
         kind: KindLiteral,
         complex_base: Optional[ComplexBaseLiteral] = None,
-        restrictions: IsoModeMask | Sequence[IsoModeMask] = (),
+        restrictions: ModeMask | Sequence[ModeMask] = (),
     ):
         self.kind = kind
         self.complex_base = complex_base
-        if isinstance(restrictions, IsoModeMask):
+        if isinstance(restrictions, ModeMask):
             restrictions = (restrictions,)
         self.restrictions = tuple(restrictions)
         self._validate_static()
@@ -44,10 +43,7 @@ class GRFSampler(eqx.Module):
             return _randoms.get_randoms_real(key, box)
         # complex
         mask = self._get_mask(box)
-        if self.complex_base == "cartesian":
-            return _randoms.get_randoms_complex_cartesian(key, box, mask)
-        else:
-            raise NotImplementedError("...")
+        return _randoms.get_randoms_complex_cartesian(key, box, mask)
 
     def sample(
         self,
@@ -57,11 +53,9 @@ class GRFSampler(eqx.Module):
     ) -> "ScalarField":
         if self.kind == "real":
             return _randoms.sample_real(randoms, box, pk_fn)
-        elif self.complex_base == "cartesian":
-            mask = self._get_mask(box)
-            return _randoms.sample_complex_cartesian(randoms, box, mask, pk_fn)
-        else:
-            raise NotImplementedError("...")
+        mask = self._get_mask(box)
+        field = _randoms.sample_complex_cartesian(randoms, box, mask, pk_fn)
+        return field.with_support(self.support(box))
 
     def sample_from_seed(
         self,
@@ -74,25 +68,15 @@ class GRFSampler(eqx.Module):
     def get_n_dof(self, box: "Box") -> dict:
         if self.kind == "real":
             return _randoms.n_dof_randoms_real(box)
-        else:  # complex
-            mask = self._get_mask(box)
-            if self.complex_base == "cartesian":
-                return _randoms.n_dof_randoms_complex_cartesian(box, mask)
-            else:
-                raise NotImplementedError("")
+        mask = self._get_mask(box)
+        return _randoms.n_dof_randoms_complex_cartesian(box, mask)
 
     # ------------------
     # --- INFERENCE ----
     # ------------------
 
     def get_dist(self) -> dict:
-        if self.kind == "real":
-            return {"u": dist.Normal(0.0, 1.0)}
-        else:  # complex
-            if self.complex_base == "cartesian":
-                return {"u": dist.Normal(0.0, 1.0)}
-            else:
-                raise NotImplementedError("")
+        return {"u": dist.Normal(0.0, 1.0)}
 
     def get_randoms_numpyro(self, box: "Box", prefix: str = "") -> dict:
 
@@ -108,15 +92,16 @@ class GRFSampler(eqx.Module):
     # --- UTILITIES ----
     # ------------------
 
-    def N_iso(self, box: "Box") -> Optional[int]:
-        """Declared support |k_idx| < N_iso / 2 of sampled fields, or None.
+    def support(self, box: "Box") -> Optional[ModeSupport]:
+        """ModeSupport of sampled fields, or None (real-space white noise).
 
-        Restrictions are intersected, so the smallest cut bounds the support.
+        Restrictions are intersected, so the tightest one bounds the support.
         """
         if self.kind == "real":
             return None
-        cuts = [n for r in self.restrictions if (n := r.N_iso(box)) is not None]
-        return min(cuts, default=None)
+        return ModeSupport.of_intersection(
+            None, *(r.support(box) for r in self.restrictions)
+        )
 
     def _get_mask(self, box: "Box"):
         # Depends only on static data: evaluate at trace time so the sizes
@@ -170,8 +155,8 @@ class GRFSampler(eqx.Module):
                     "restrictions are only meaningful with kind='complex'."
                 )
         else:  # complex
-            if self.complex_base not in ("cartesian", "polar", "polar_fix_amp"):
+            if self.complex_base != "cartesian":
                 raise ValueError(
-                    "kind='complex' requires complex_base in {'cartesian', 'polar', 'polar_fix_amp'}; "
+                    "kind='complex' only supports complex_base='cartesian'; "
                     f"got {self.complex_base!r}."
                 )

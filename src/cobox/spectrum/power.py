@@ -18,7 +18,7 @@ class PowerSpectrum(Spectrum):
     possibly negative; sigma methods only describe nonnegative auto-variances.
 
     This callable model is distinct from the measured, binned result
-    cobox.field.stats.PowerSpectrum.
+    cobox.field.stats.PowerSpectrumEstimate.
     """
 
     def delta_sq(self, k: ArrayLike, *args: Any, **kwargs: Any) -> jax.Array:

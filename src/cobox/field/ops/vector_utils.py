@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from ...box.support import ModeSupport
 from . import field_product
 from .calculus import GradientKernelLiteral, grad_kernel as _grad_kernel
 
@@ -23,7 +24,6 @@ def dot_product(
     v2: "VectorField",
     *,
     dealias: bool = False,
-    N_iso: tuple[int, int] | None = None,
     out_N: field_product.OutputN = None,
     return_hat: bool | None = None,
 ) -> "ScalarField":
@@ -38,7 +38,6 @@ def dot_product(
             v1.component(i),
             v2.component(i),
             dealias=dealias,
-            N_iso=N_iso,
             out_N=out_N,
             return_hat=return_hat,
         )
@@ -55,6 +54,7 @@ def dot_product(
         data=total,
         box=first.box,
         has_hat=first.has_hat,
+        support=ModeSupport.of_sum(*(t.support for t in terms)),
     )
 
 
@@ -63,7 +63,6 @@ def cross_product(
     v2: "VectorField",
     *,
     dealias: bool = False,
-    N_iso: tuple[int, int] | None = None,
     out_N: field_product.OutputN = None,
     return_hat: bool | None = None,
 ) -> "ScalarField | VectorField":
@@ -83,7 +82,6 @@ def cross_product(
             v1.component(i),
             v2.component(j),
             dealias=dealias,
-            N_iso=N_iso,
             out_N=out_N,
             return_hat=return_hat,
         )
@@ -103,18 +101,21 @@ def cross_product(
 
     first = terms[0][0]
     components = [positive.data - negative.data for positive, negative in terms]
+    support = ModeSupport.of_sum(*(f.support for pair in terms for f in pair))
 
     if D == 2:
         return ScalarField(
             data=components[0],
             box=first.box,
             has_hat=first.has_hat,
+            support=support,
         )
 
     return VectorField(
         data=jnp.stack(components, axis=0),
         box=first.box,
         has_hat=first.has_hat,
+        support=support,
     )
 
 
@@ -141,6 +142,7 @@ def curl(
             data=data,
             box=f.box,
             has_hat=True,
+            support=f.support,
         )
     # D == 3
     cx = G[1] * f.data[2] - G[2] * f.data[1]
@@ -150,6 +152,7 @@ def curl(
         data=jnp.stack([cx, cy, cz], axis=0),
         box=f.box,
         has_hat=True,
+        support=f.support,
     )
 
 
@@ -204,4 +207,5 @@ def inverse_curl(omega: "ScalarField | VectorField") -> "VectorField":
         data=vhat,
         box=box,
         has_hat=True,
+        support=omega.support,
     )

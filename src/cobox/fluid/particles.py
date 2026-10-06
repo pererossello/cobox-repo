@@ -146,9 +146,17 @@ class Particles(eqx.Module):
         bspline_scale: float | BSplineScaleLiteral = "particles",
         mesh_convention: MeshConventionLiteral = "node",
         weights: jax.Array | None = None,
-        return_contrast: bool = False,
     ) -> ScalarField:
-        """Integrate separable particle clouds over periodic target cells.Literal["particles", "target_box"]
+        """Deposit weighted particles in units of the mean particle density.
+
+        Returns sum_p w_p W(x - x_p) / nbar, with nbar = particles per target
+        cell (known in advance, not measured). Unit weights (None) give
+        1 + delta; weights O(q) give the operator O carried to x; weights
+        1 + sum_O b_O O(q) give 1 + delta of a Lagrangian-biased tracer.
+
+        weights has one value per particle, in the order of q. Weights from a
+        field on the particles' own box, sampled at its nodes (shift=0), are
+        field.ifft().data.reshape(-1).
 
         Order 0 is a point mass (NGP). Orders 1, 2, and 3 use a top-hat,
         triangular, and quadratic B-spline cloud, respectively.
@@ -209,10 +217,8 @@ class Particles(eqx.Module):
                     K_max,
                 )
 
-        if return_contrast:
-            data = data / data.mean() - 1
-
-        return ScalarField(data, box=target_box)
+        nbar = self.ND / target_box.ND
+        return ScalarField(data / nbar, box=target_box)
 
     # ------------
     # --- PLOT ---

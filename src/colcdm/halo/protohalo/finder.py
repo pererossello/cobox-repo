@@ -11,7 +11,7 @@ from jax.typing import ArrayLike
 
 from cobox.field import ScalarField
 
-from ..growth import Growth
+from ...growth import Growth
 from ._exclusion import EXCLUSION_DISPATCH
 from ._patches import measure
 from ._radii import resolve_radii
@@ -19,9 +19,9 @@ from .catalog import ProtohaloCatalog
 from .collapse import Collapse
 
 if TYPE_CHECKING:
-    from cobox.box import Box
+    from cobox.box import Box, ModeSupport
 
-    from ..cosmology.background import BackgroundCosmo
+    from ...cosmology.background import BackgroundCosmo
 
 SeedsLiteral = Literal["nodes"]
 SEEDS_KINDS = ("nodes",)
@@ -49,7 +49,7 @@ class ProtohaloFinder(eqx.Module):
 
     seeds: nodes (every node is a candidate centre).
     exclusion: full (accepted spheres never overlap).
-    Radii are log spaced, step <= dlnR, from R_min = R_min_factor L / N_iso
+    Radii are log spaced, step <= dlnR, from R_min = R_min_factor L / N_eff
     to R_max (None: L / 4), in Mpc/h.
     """
 
@@ -69,14 +69,11 @@ class ProtohaloFinder(eqx.Module):
         delta0: ScalarField,
         a: ArrayLike,
         background: BackgroundCosmo,
-        *,
-        N_iso: int | None = None,
     ) -> ProtohaloCatalog:
         """Protohalos of delta0, the linear field extrapolated to a = 1.
 
         a is a scalar (snapshot) or one value per node (light cone, e.g.
-        LPTBasis.get_a_lc on the same box). N_iso declares |k_idx| < N_iso / 2;
-        it sets R_min and does not filter the input.
+        LPTBasis.get_a_lc on the same box). delta0.support sets R_min.
         """
         box = delta0.box
         if box.D != 3:
@@ -86,7 +83,7 @@ class ProtohaloFinder(eqx.Module):
         delta0 = delta0.fft()  # one FFT, shared by every radius
 
         exclusion = EXCLUSION_DISPATCH[self.exclusion].start(box)
-        for R in self.radii(box, N_iso=N_iso):
+        for R in self.radii(box, support=delta0.support):
             patch = measure(delta0, R, self.collapse.needs)
             collapsed = self.collapse.collapsed(patch, a, D, background)
             exclusion = exclusion.update(patch, collapsed)
@@ -98,11 +95,13 @@ class ProtohaloFinder(eqx.Module):
             a=jnp.broadcast_to(a, box.SHAPE)[tuple(idx)],
         )
 
-    def radii(self, box: Box, *, N_iso: int | None = None) -> tuple[float, ...]:
-        """Descending radii in Mpc/h tested on box."""
+    def radii(
+        self, box: Box, *, support: ModeSupport | None = None
+    ) -> tuple[float, ...]:
+        """Descending radii in Mpc/h tested on box for a field with support."""
         return resolve_radii(
             box,
-            N_iso,
+            support,
             dlnR=self.dlnR,
             R_min_factor=self.R_min_factor,
             R_max=self.R_max,

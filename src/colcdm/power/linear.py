@@ -31,10 +31,10 @@ class LinearPower(PowerSpectrum):
     def __check_init__(self):
         if not isinstance(self.primordial, PrimordialSpectrum):
             raise TypeError("primordial must be a PrimordialSpectrum instance.")
-        for name in ("transfer_x", "transfer_y"):
-            value = getattr(self, name)
-            if value is not None and not isinstance(value, Spectrum):
-                raise TypeError(f"{name} must be a transfer, e.g. MatterTransfer.")
+        if not isinstance(self.transfer_x, Spectrum):
+            raise TypeError("transfer_x must be a transfer, e.g. MatterTransfer.")
+        if self.transfer_y is not None and not isinstance(self.transfer_y, Spectrum):
+            raise TypeError("transfer_y must be a transfer, e.g. MatterTransfer.")
 
     def __call__(
         self,

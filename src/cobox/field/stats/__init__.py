@@ -25,15 +25,14 @@ from ._binning import KBins
 from ._results import Binned, stack
 from .one_point import PDF, Moments, moments, pdf
 from .two_point import (
-    CrossSpectrum,
-    PowerSpectrum,
+    CrossSpectrumEstimate,
+    PowerSpectrumEstimate,
     cross_spectrum,
     mode_coherence,
     mode_power,
     plot_modes,
     power_spectrum,
 )
-from .three_point import Bispectrum, bispectrum
 
 __all__ = [
     "KBins",
@@ -43,13 +42,11 @@ __all__ = [
     "PDF",
     "moments",
     "pdf",
-    "PowerSpectrum",
-    "CrossSpectrum",
+    "PowerSpectrumEstimate",
+    "CrossSpectrumEstimate",
     "mode_power",
     "mode_coherence",
     "power_spectrum",
     "cross_spectrum",
     "plot_modes",
-    "Bispectrum",
-    "bispectrum",
 ]

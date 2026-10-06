@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
-from itertools import permutations
-from numbers import Integral
+from itertools import permutations, product
 from typing import TYPE_CHECKING, Literal
 
 import jax
 import jax.numpy as jnp
 
+from ...box.support import ModeSupport
 from . import field_product
 
 if TYPE_CHECKING:
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
     from ..tensor import TensorField
 
 Symmetry = Literal["symmetric", "antisymmetric"] | None
-Support = int | tuple[int, ...] | None
 Monomial = tuple[float, tuple["ScalarField", ...]]
 
 
@@ -81,7 +80,7 @@ def component(t: TensorField, k: int, j: int) -> ScalarField:
         if idx is None
         else sign * t.data[idx]
     )
-    return ScalarField(data=data, box=t.box, has_hat=t.has_hat)
+    return ScalarField(data=data, box=t.box, has_hat=t.has_hat, support=t.support)
 
 
 def to_full(t: TensorField) -> jax.Array:
@@ -95,7 +94,12 @@ def to_full(t: TensorField) -> jax.Array:
 
 
 def from_full(
-    full: jax.Array, *, box: Box, symmetry: Symmetry, has_hat: bool
+    full: jax.Array,
+    *,
+    box: Box,
+    symmetry: Symmetry,
+    has_hat: bool,
+    support: ModeSupport | None = None,
 ) -> TensorField:
     """Pack a dense tensor; the caller guarantees the declared symmetry."""
     from ..tensor import TensorField
@@ -112,7 +116,9 @@ def from_full(
             raise ValueError("Antisymmetric tensor storage requires D >= 2.")
         offset = int(symmetry == "antisymmetric")
         data = jnp.stack([full[i, j] for i in range(D) for j in range(i + offset, D)])
-    return TensorField(data=data, box=box, has_hat=has_hat, symmetry=symmetry)
+    return TensorField(
+        data=data, box=box, has_hat=has_hat, symmetry=symmetry, support=support
+    )
 
 
 # --- Linear operations ---
@@ -144,6 +150,7 @@ def symmetric_part(t: TensorField) -> TensorField:
         box=t.box,
         symmetry="symmetric",
         has_hat=t.has_hat,
+        support=t.support,
     )
 
 
@@ -158,6 +165,7 @@ def antisymmetric_part(t: TensorField) -> TensorField:
         box=t.box,
         symmetry="antisymmetric",
         has_hat=t.has_hat,
+        support=t.support,
     )
 
 
@@ -179,18 +187,6 @@ def _same_box(tensors: Sequence[TensorField]) -> None:
         raise ValueError("Tensor operands live on different boxes.")
 
 
-def _supports(N_iso: Support, count: int) -> tuple[int, ...] | None:
-    if N_iso is None:
-        return None
-    if count == 1:
-        if isinstance(N_iso, bool) or not isinstance(N_iso, Integral):
-            raise TypeError("A single tensor requires one integer N_iso.")
-        return (int(N_iso),)
-    if not isinstance(N_iso, tuple) or len(N_iso) != count:
-        raise ValueError(f"Expected a tuple of {count} N_iso values.")
-    return N_iso
-
-
 def _zero(t: TensorField) -> ScalarField:
     f = component(t, 0, 0)
     return replace(f, data=jnp.zeros_like(f.data))
@@ -200,7 +196,6 @@ def _sum_products(
     terms: Iterable[Monomial],
     *,
     dealias: bool,
-    N_iso: tuple[int, ...] | None,
     out_N: field_product.OutputN,
     return_hat: bool | None,
 ) -> ScalarField:
@@ -209,18 +204,17 @@ def _sum_products(
         result = field_product._dispatch_product(
             operands,
             dealias=dealias,
-            N_iso=N_iso,
             out_N=out_N,
             return_hat=return_hat,
         )
         return replace(result, data=weight * result.data)
 
-    iterator = iter(terms)
-    result = evaluate(next(iterator))
-    data = result.data
-    for term in iterator:
-        data = data + evaluate(term).data
-    return replace(result, data=data)
+    results = [evaluate(term) for term in terms]
+    data = results[0].data
+    for result in results[1:]:
+        data = data + result.data
+    support = ModeSupport.of_sum(*(r.support for r in results))
+    return replace(results[0], data=data, support=support)
 
 
 def _trace_product_terms(a: TensorField, b: TensorField) -> list[Monomial]:
@@ -246,16 +240,83 @@ def trace_of_product(
     b: TensorField,
     *,
     dealias: bool = False,
-    N_iso: tuple[int, int] | None = None,
     out_N: field_product.OutputN = None,
     return_hat: bool | None = None,
 ) -> ScalarField:
-    """tr(AB); one support bound per tensor, shared by its components."""
+    """tr(AB); dealiasing reads each tensor's support."""
     _same_box((a, b))
     return _sum_products(
         _trace_product_terms(a, b),
         dealias=dealias,
-        N_iso=_supports(N_iso, 2),
+        out_N=out_N,
+        return_hat=return_hat,
+    )
+
+
+def _stored(t: TensorField, s: int) -> ScalarField:
+    """Stored component s as a ScalarField (no sign, no implicit zeros)."""
+    from ..scalar import ScalarField
+
+    return ScalarField(data=t.data[s], box=t.box, has_hat=t.has_hat, support=t.support)
+
+
+def _trace_terms(tensors: Sequence[TensorField]) -> list[Monomial]:
+    """Monomials of tr(T_1 T_2 ... T_n), merged up to the order of factors.
+
+    tr(T_1 ... T_n) = sum over the closed index loop (i_1, ..., i_n) of
+    (T_1)_{i_1 i_2} (T_2)_{i_2 i_3} ... (T_n)_{i_n i_1}: one stored component
+    per tensor. Scalar factors commute, so summands that are the same multiset
+    of (tensor, storage index) merge and their weights add; antisymmetric signs
+    fold into the weight and implicit zeros drop out.
+    """
+    D, n = tensors[0].box.D, len(tensors)
+    first: dict[int, int] = {}  # id(tensor) -> first position: repeats merge
+    for p, t in enumerate(tensors):
+        first.setdefault(id(t), p)
+
+    merged: dict[tuple[tuple[int, int], ...], float] = {}
+    for loop in product(range(D), repeat=n):
+        weight = 1.0
+        factors = []
+        for p, t in enumerate(tensors):
+            s, sign = _component_storage_index_signed(
+                loop[p], loop[(p + 1) % n], D, t.symmetry
+            )
+            if s is None:  # antisymmetric diagonal: the summand vanishes
+                break
+            weight *= sign
+            factors.append((first[id(t)], s))
+        else:
+            key = tuple(sorted(factors))
+            merged[key] = merged.get(key, 0.0) + weight
+
+    terms: list[Monomial] = [
+        (w, tuple(_stored(tensors[q], s) for q, s in key))
+        for key, w in merged.items()
+        if w != 0.0
+    ]
+    return terms or [(1.0, tuple(_zero(t) for t in tensors))]
+
+
+def trace_of_products(
+    tensors: Sequence[TensorField],
+    *,
+    dealias: bool = False,
+    out_N: field_product.OutputN = None,
+    return_hat: bool | None = None,
+) -> ScalarField:
+    """tr(T_1 T_2 ... T_n) for n >= 2, as a sum of n-fold monomials.
+
+    Each monomial is one n-fold product without intermediate projection, so
+    dealias=True (which reads each tensor's support) is exact.
+    """
+    tensors = tuple(tensors)
+    if len(tensors) < 2:
+        raise ValueError("trace_of_products needs at least two tensors; use trace.")
+    _same_box(tensors)
+    return _sum_products(
+        _trace_terms(tensors),
+        dealias=dealias,
         out_N=out_N,
         return_hat=return_hat,
     )
@@ -266,19 +327,15 @@ def second_invariant(
     other: TensorField | None = None,
     *,
     dealias: bool = False,
-    N_iso: int | tuple[int, int] | None = None,
     out_N: field_product.OutputN = None,
     return_hat: bool | None = None,
 ) -> ScalarField:
     """I2(T), or the polarization (tr(A)tr(B) - tr(AB))/2."""
     if other is not None:
         _same_box((t, other))
-        supports = _supports(N_iso, 2)
         terms: list[Monomial] = [(0.5, (trace(t), trace(other)))]
         terms += [(-0.5 * w, fs) for w, fs in _trace_product_terms(t, other)]
     else:
-        support = _supports(N_iso, 1)
-        supports = None if support is None else support * 2
         terms = []
         for i in range(t.box.D):
             for j in range(i + 1, t.box.D):
@@ -294,7 +351,6 @@ def second_invariant(
     return _sum_products(
         terms,
         dealias=dealias,
-        N_iso=supports,
         out_N=out_N,
         return_hat=return_hat,
     )
@@ -316,7 +372,6 @@ def det(
     t: TensorField,
     *,
     dealias: bool = False,
-    N_iso: int | None = None,
     out_N: field_product.OutputN = None,
     return_hat: bool | None = None,
 ) -> ScalarField:
@@ -326,12 +381,9 @@ def det(
         return second_invariant(
             t,
             dealias=dealias,
-            N_iso=N_iso,
             out_N=out_N,
             return_hat=return_hat,
         )
-    support = _supports(N_iso, 1)
-    supports = None if support is None else support * D
     if D == 1:
         terms: list[Monomial] = [(1.0, (component(t, 0, 0),))]
     elif D == 3:
@@ -356,7 +408,6 @@ def det(
     return _sum_products(
         terms,
         dealias=dealias,
-        N_iso=supports,
         out_N=out_N,
         return_hat=return_hat,
     )
@@ -366,7 +417,6 @@ def _mixed_det3(
     rows: tuple[TensorField, TensorField, TensorField],
     *,
     dealias: bool,
-    N_iso: tuple[int, ...] | None,
     out_N: field_product.OutputN,
     return_hat: bool | None,
 ) -> ScalarField:
@@ -377,7 +427,6 @@ def _mixed_det3(
     return _sum_products(
         terms,
         dealias=dealias,
-        N_iso=N_iso,
         out_N=out_N,
         return_hat=return_hat,
     )
@@ -389,7 +438,6 @@ def third_invariant(
     c: TensorField | None = None,
     *,
     dealias: bool = False,
-    N_iso: Support = None,
     out_N: field_product.OutputN = None,
     return_hat: bool | None = None,
 ) -> ScalarField:
@@ -398,31 +446,18 @@ def third_invariant(
     Normalization: mu3(T,T,T) = det(T).
     """
     if b is None and c is None:
-        support = _supports(N_iso, 1)
-        return det(
-            a,
-            dealias=dealias,
-            N_iso=None if support is None else support[0],
-            out_N=out_N,
-            return_hat=return_hat,
-        )
+        return det(a, dealias=dealias, out_N=out_N, return_hat=return_hat)
     if b is None:
         raise ValueError("Pass (a), (a, b), or (a, b, c).")
     if a.box.D != 3:
         raise ValueError("Mixed third_invariant requires D == 3.")
-    support = _supports(N_iso, 2 if c is None else 3)
-    if c is None:
-        tensors = (a, a, b)
-        support = None if support is None else (support[0], support[0], support[1])
-    else:
-        tensors = (a, b, c)
+    tensors = (a, a, b) if c is None else (a, b, c)
     _same_box(tensors)
 
-    assignments: dict[tuple, tuple[int, tuple[int, ...]]] = {}
+    # Row assignments that coincide (repeated tensors) are evaluated once.
+    assignments: dict[tuple[int, ...], tuple[int, tuple[int, ...]]] = {}
     for order in permutations(range(3)):
-        key = tuple(
-            (id(tensors[i]), None if support is None else support[i]) for i in order
-        )
+        key = tuple(id(tensors[i]) for i in order)
         weight, _ = assignments.get(key, (0, order))
         assignments[key] = (weight + 1, order)
 
@@ -431,7 +466,6 @@ def third_invariant(
         result = _mixed_det3(
             (tensors[order[0]], tensors[order[1]], tensors[order[2]]),
             dealias=dealias,
-            N_iso=None if support is None else tuple(support[i] for i in order),
             out_N=out_N,
             return_hat=return_hat,
         )
@@ -439,7 +473,8 @@ def third_invariant(
     data = results[0].data
     for result in results[1:]:
         data = data + result.data
-    return replace(results[0], data=data)
+    support = ModeSupport.of_sum(*(r.support for r in results))
+    return replace(results[0], data=data, support=support)
 
 
 # --- Pointwise eigenvalues ---
