@@ -1,6 +1,6 @@
 """Correlated Gaussian real scalar fields on a common shell."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from numbers import Integral
 from typing import TYPE_CHECKING
 
@@ -18,14 +18,15 @@ from ._modes import sampling_mask
 if TYPE_CHECKING:
     from ..field import ShellField
     from ..shell import Shell
+    from ..spectrum import AngularSpectrum
 
 
 class JointShellGRFSampler(eqx.Module):
     """Draw n_fields correlated real scalar skies from C_ell[i, j].
 
-    cl_fn receives shell.ell_1D, shape (L,), and must return a real symmetric
-    covariance of shape (L, n_fields, n_fields). Field order is preserved in
-    the returned tuple. Signed cross-spectra and singular PSD covariances are
+    cl is an AngularSpectrum with values of shape (ell_max + 1, n_fields,
+    n_fields), ell_max >= shell.ELL_MAX: a real symmetric covariance at each
+    ell, e.g. from cross_spectrum. Field order is preserved in the returned tuple. Signed cross-spectra and singular PSD covariances are
     valid. The same restrictions apply to every field; the monopole is omitted.
 
     randoms['u'] is one flat standard-normal vector, grouped by field, then by
@@ -73,7 +74,7 @@ class JointShellGRFSampler(eqx.Module):
         self,
         randoms: dict,
         shell: "Shell",
-        cl_fn: Callable[[jax.Array], jax.Array],
+        cl: "AngularSpectrum",
     ) -> tuple["ShellField", ...]:
         """Transform independent latent coordinates into jointly distributed fields."""
         from ..field import ShellField
@@ -90,7 +91,7 @@ class JointShellGRFSampler(eqx.Module):
         raw = jax.vmap(_harmonic.pack, in_axes=(0, None))(
             u.reshape(self.n_fields, n_modes), mask
         )
-        factor = covariance_factor(shell, mask, cl_fn, self.n_fields)
+        factor = covariance_factor(shell, mask, cl, self.n_fields)
         mixed = jnp.einsum(
             "lij,jlm->ilm", factor, raw, precision=jax.lax.Precision.HIGHEST
         )
@@ -101,15 +102,15 @@ class JointShellGRFSampler(eqx.Module):
         )
 
     def sample_from_seed(
-        self, seed: int, shell: "Shell", cl_fn: Callable
+        self, seed: int, shell: "Shell", cl: "AngularSpectrum"
     ) -> tuple["ShellField", ...]:
-        return self.sample(self.get_randoms(seed, shell), shell, cl_fn)
+        return self.sample(self.get_randoms(seed, shell), shell, cl)
 
     def randoms_from_grf(
         self,
         fields: Sequence["ShellField"],
         shell: "Shell",
-        cl_fn: Callable,
+        cl: "AngularSpectrum",
     ) -> dict:
         """Recover latents for full rank, or minimum-norm latents for singular power.
 
@@ -125,7 +126,7 @@ class JointShellGRFSampler(eqx.Module):
                 "fields must contain n_fields fields on the supplied shell."
             )
         mask = self._get_mask(shell)
-        factor = covariance_factor(shell, mask, cl_fn, self.n_fields)
+        factor = covariance_factor(shell, mask, cl, self.n_fields)
         cutoff = self.n_fields * jnp.finfo(factor.dtype).eps
         inverse = jnp.linalg.pinv(factor, rtol=cutoff, hermitian=True)
         data = jnp.stack([f.sht().data for f in fields])

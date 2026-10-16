@@ -130,55 +130,75 @@ def _spherical_jn(x: jax.Array, ell_max: int) -> jax.Array:
     return parity * values
 
 
+def _derivative(extended: jax.Array, ell_max: int) -> jax.Array:
+    """j_ell' for 0 <= ell <= ell_max, from j_ell for 0 <= ell <= ell_max + 1.
+
+    Equivalent to j_(ell-1) - (ell+1) j_ell/x, but regular at x = 0.
+    """
+    ell = jnp.arange(ell_max + 1, dtype=extended.dtype)
+    ell = ell.reshape((-1,) + (1,) * (extended.ndim - 1))
+    previous = jnp.concatenate([jnp.zeros_like(extended[:1]), extended[:ell_max]])
+    return (ell * previous - (ell + 1) * extended[1:]) / (2 * ell + 1)
+
+
 @_spherical_jn.defjvp
 def _spherical_jn_jvp(ell_max, primals, tangents):
     (x,), (x_dot,) = primals, tangents
     extended = _spherical_jn(x, ell_max + 1)
-    ell = jnp.arange(ell_max + 1, dtype=x.dtype).reshape((-1,) + (1,) * x.ndim)
-    previous = jnp.concatenate(
-        [jnp.zeros_like(x)[None], extended[:ell_max]]  # type:ignore
-    )
-    # Equivalent to j_(ell-1) - (ell+1) j_ell/x, but regular at x = 0.
-    derivative = (ell * previous - (ell + 1) * extended[1:]) / (  # type:ignore
-        2 * ell + 1
-    )
-    return extended[:-1], derivative * x_dot
+    return extended[:-1], _derivative(extended, ell_max) * x_dot  # type:ignore
 
 
-def spherical_jn(x: ArrayLike, ell_max: int) -> jax.Array:
-    """Return j_ell(x) for every integer 0 <= ell <= ell_max.
+def _static_int(value: int, name: str) -> int:
+    """Shared validation for static integer settings of projection code."""
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be an integer.")
+    return index(value)
+
+
+def spherical_jn(x: ArrayLike, ell_max: int, derivative: int = 0) -> jax.Array:
+    """Return j_ell(x) or its first/second derivative for 0 <= ell <= ell_max.
 
     Parameters
     ----------
     x : array_like
         Finite real arguments, with any shape. Negative arguments use parity.
-        Floating inputs retain their precision, with a minimum of float32.
+        Computed in JAX's default float (float64 with jax_enable_x64).
     ell_max : int
         Nonnegative maximum order, static under JAX transformations.
+    derivative : int
+        0 for j_ell, 1 for d j_ell / dx, 2 for d² j_ell / dx². Static.
 
     Returns
     -------
     jax.Array
         Shape ``(ell_max + 1, *x.shape)``; the first axis is the order. JIT,
-        vmap, and differentiation in x are supported, including at x = 0.
+        vmap, and differentiation in x are supported, including at x = 0,
+        for both values and derivatives.
 
     Notes
     -----
     Uses a series below |x| = 1, upward recurrence for |x| > ell_max, and
     scaled Miller recurrence otherwise. The starting-order margin is chosen
     conservatively and checked against SciPy through ell_max = 2048. Values
-    below the dtype's normal range may underflow. Float64 is recommended for
-    accurate projection integrals; enable it with JAX's usual configuration.
+    below the float's normal range may underflow. Float64 is recommended for
+    accurate projection integrals; enable it with jax_enable_x64.
+    Derivatives apply (ell j_(ell-1) - (ell+1) j_(ell+1)) / (2 ell + 1)
+    once or twice to values through ell_max + derivative. This recurrence
+    has no divisions by x and remains regular at the origin.
     Complex arguments are not supported. This API returns all orders and uses
     argument order ``(x, ell_max)``, unlike SciPy's ``(n, z)``.
     """
-    if isinstance(ell_max, bool):
-        raise TypeError("ell_max must be a nonnegative integer.")
-    ell_max = index(ell_max)
+    ell_max = _static_int(ell_max, "ell_max")
     if ell_max < 0:
         raise ValueError("ell_max must be nonnegative.")
+    derivative = _static_int(derivative, "derivative")
+    if derivative not in (0, 1, 2):
+        raise ValueError("derivative must be 0, 1 or 2.")
     x = jnp.asarray(x)
     if jnp.issubdtype(x.dtype, jnp.complexfloating):
         raise TypeError("spherical_jn supports real arguments only.")
-    x = x.astype(jnp.result_type(x.dtype, jnp.float32))
-    return _spherical_jn(x, ell_max)
+    x = x.astype(float)
+    values = _spherical_jn(x, ell_max + derivative)
+    for remaining in reversed(range(derivative)):
+        values = _derivative(values, ell_max + remaining)
+    return values

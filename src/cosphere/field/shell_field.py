@@ -1,9 +1,10 @@
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import equinox as eqx
 import jax
 import numpy as np
+from jax.typing import ArrayLike
 
 from .ops import arithmetic
 
@@ -57,6 +58,28 @@ class ShellField(eqx.Module):
         from .ops.filtering import filter_ell
 
         return filter_ell(self, response, iter=iter)
+
+    # ---------------------
+    # --- INTERPOLATION ---
+    # ---------------------
+
+    def interpolate_at(
+        self,
+        theta: ArrayLike,
+        phi: ArrayLike,
+        *,
+        method: Literal["ngp", "bilinear"] = "bilinear",
+    ) -> jax.Array:
+        """Interpolate pixel-centre values at equal-length 1D angles in radians.
+
+        theta is colatitude in [0, pi]; phi is periodic longitude. Returns (N,).
+        ngp reads the containing pixel; bilinear is piecewise differentiable.
+        Harmonic inputs are first synthesized with isht(). No pixel averaging,
+        area normalization or smoothing correction is applied.
+        """
+        from .ops.interpolation import interpolate_at
+
+        return interpolate_at(self, theta, phi, method=method)
 
     # ------------------------
     # --- BASIC ARITHMETIC ---

@@ -10,6 +10,7 @@ poetry.lock
 AGENTS.md
 CLAUDE.md
 
+mine/
 docs/
 slop/
 tests/

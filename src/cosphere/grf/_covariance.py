@@ -4,6 +4,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
+from ._spectrum import shell_values
+
 
 @jax.custom_jvp
 def symmetric_sqrt(matrix):
@@ -34,20 +36,14 @@ def _sqrt_jvp(primals, tangents):
     return root, vectors @ local @ transpose
 
 
-def covariance_factor(shell, mask, cl_fn, n_fields):
-    """Evaluate and validate C_ell, returning its real symmetric square root.
+def covariance_factor(shell, mask, cl, n_fields):
+    """Validate C_ell for the shell's multipoles, returning its real symmetric square root.
 
     Only retained multipoles are validated; excluded multipoles may contain
-    undefined spectra. Complex spectra are rejected: real scalar isotropic
-    fields require real symmetric C_ell, including signed cross-spectra.
+    undefined spectra. AngularSpectrum is real: real scalar isotropic fields
+    require real symmetric C_ell, including signed cross-spectra.
     """
-    covariance = jnp.asarray(cl_fn(shell.ell_1D))
-    expected = (shell.L, n_fields, n_fields)
-    if covariance.shape != expected:
-        raise ValueError(f"cl_fn must return shape {expected}; got {covariance.shape}.")
-    if jnp.iscomplexobj(covariance):
-        raise TypeError("Joint real scalar fields require real covariance spectra.")
-    covariance = covariance.astype(jnp.result_type(covariance, jnp.float32))
+    covariance = shell_values(cl, shell, (n_fields, n_fields)).astype(float)
     keep = jnp.any(mask, axis=-1)
     covariance = jnp.where(keep[:, None, None], covariance, 0)
     covariance = eqx.error_if(

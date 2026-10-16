@@ -64,6 +64,9 @@ def zphi2pix(
     nside: int, z: jax.Array, sin_theta: jax.Array, phi: jax.Array
 ) -> jax.Array:
     """RING pixel containing the direction with cos(theta) = z, sin(theta), and phi."""
+    # sin(pi) can round slightly negative. Colatitude has nonnegative sine;
+    # preserving that domain prevents an invalid polar ring/pixel index.
+    sin_theta = jnp.maximum(sin_theta, 0.0)
     npix = 12 * nside**2
     ncap = 2 * nside * (nside - 1)
     za = jnp.abs(z)

@@ -2,22 +2,13 @@
 
     auto = field.stats.power_spectrum()
     comparison = cross_spectrum(field, other)
-    comparison.plot("r")
+    comparison.correlation[:, 0, 1]
 
-power_spectrum(a, b) returns AB alone. cross_spectrum(a, b) returns AA/BB/AB,
-matching cobox.field.stats. Result objects are JAX PyTrees; plotting is host-only.
+power_spectrum(a, b) returns AB alone, values of shape (L,). cross_spectrum(a, b)
+returns [[AA, AB], [AB, BB]], values of shape (L, 2, 2). Both are
+cosphere.spectrum.AngularSpectrum objects, the same container as predictions.
 """
 
-from .two_point import (
-    AngularCrossSpectrumEstimate,
-    AngularSpectrumEstimate,
-    cross_spectrum,
-    power_spectrum,
-)
+from .two_point import cross_spectrum, power_spectrum
 
-__all__ = [
-    "AngularCrossSpectrumEstimate",
-    "AngularSpectrumEstimate",
-    "cross_spectrum",
-    "power_spectrum",
-]
+__all__ = ["cross_spectrum", "power_spectrum"]

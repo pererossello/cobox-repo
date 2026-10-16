@@ -1,23 +1,7 @@
-"""Cosmology-independent mathematics for projecting 3D fields onto the sky."""
+"""Cosmology-independent radial projections of 3D fields onto the sphere."""
 
 from ._bessel import spherical_jn
-from ._cl import angular_cl
-from ._kernels import radial_kernel
-from .windows import (
-    GaussianWindow,
-    RadialWindow,
-    TabulatedWindow,
-    ThinShellWindow,
-    TopHatWindow,
-)
+from .kernel import ProjectionKernel
+from .projector import RadialProjector
 
-__all__ = [
-    "GaussianWindow",
-    "RadialWindow",
-    "TabulatedWindow",
-    "ThinShellWindow",
-    "TopHatWindow",
-    "angular_cl",
-    "radial_kernel",
-    "spherical_jn",
-]
+__all__ = ["ProjectionKernel", "RadialProjector", "spherical_jn"]

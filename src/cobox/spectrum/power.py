@@ -1,12 +1,16 @@
 """Theory power spectra and their isotropic three-dimensional statistics."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 
 from .spectrum import Spectrum
+
+if TYPE_CHECKING:
+    from cosphere.projection import ProjectionKernel
+    from cosphere.spectrum import AngularSpectrum
 
 
 class PowerSpectrum(Spectrum):
@@ -60,3 +64,22 @@ class PowerSpectrum(Spectrum):
     def sigma8(self, *args, **kw) -> jax.Array:
         """sigma_R at R = 8 in inverse-k units (8 Mpc/h if k is in h/Mpc)."""
         return self.sigma_R(8.0, *args, **kw)
+
+    def angular_power(
+        self,
+        kernel: "ProjectionKernel",
+        *args,
+        other: "ProjectionKernel | None" = None,
+        **kwargs,
+    ) -> "AngularSpectrum":
+        """C_ell = 4 pi int Delta^2(k) Delta_ell(k) Delta'_ell(k) dln k, from projection kernels.
+
+        The projected counterpart of variance_R, with kernels in place of
+        windows and on the kernels' k grid, which must use this spectrum's k
+        units. This spectrum, evaluated with args and kwargs, is the auto-power
+        P0 of the source field common to both kernels; other=None gives the
+        auto-spectrum. Same calculation as ProjectionKernel.angular_power.
+        """
+        from cosphere.projection._angular import angular_power
+
+        return angular_power(lambda k: self(k, *args, **kwargs), kernel, other)
