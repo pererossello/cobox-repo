@@ -10,12 +10,16 @@ poetry.lock
 AGENTS.md
 CLAUDE.md
 
+applicat
+downstream/
 mine/
 docs/
 slop/
 tests/
 z_bin/
 notebooks/z_old
+notebooks/kSZxARF
+notebooks/examples
 
 # Python bytecode and compiled extensions
 *.py[cod]
