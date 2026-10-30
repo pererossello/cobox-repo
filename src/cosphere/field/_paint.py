@@ -11,9 +11,11 @@ import numpy as np
 if TYPE_CHECKING:
     import matplotlib.axes
     import matplotlib.cm
+    import matplotlib.colors
     import matplotlib.figure
     from matplotlib.axes import Axes
 
+    from ..masks import ShellMask
     from .shell_field import ShellField
 
 FlipLiteral = Literal["geo", "astro"]
@@ -57,21 +59,26 @@ def paint(
     flip: FlipLiteral = "geo",
     resolution: int = 800,
     figsize: tuple = (8.0, 4.8),
-    cmap: str = "viridis",
+    cmap: "str | matplotlib.colors.Colormap" = "viridis",
     colorbar: bool = True,
     title: Optional[str] = None,
     graticule: bool = False,
     log_data: bool = False,
+    mask: "Optional[ShellMask]" = None,
+    mask_color: str = "0.6",
     **kwargs,
 ) -> PaintResult:
     """Paint ``field`` on ``ax`` (created if ``None``) in Mollweide projection,
     centred on phi = 0. Painted in pixel space (``isht`` is applied first);
     ``log_data`` plots ``log10(data)``. ``flip="geo"`` draws phi increasing to
     the right, ``"astro"`` to the left (the sky seen from inside).
-    ``resolution`` is the image width in samples. Extra kwargs go to
-    ``ax.imshow``."""
+    ``resolution`` is the image width in samples. Pixels a ``mask`` excludes
+    are drawn in ``mask_color`` and left out of the colour range. Extra kwargs
+    go to ``ax.imshow``."""
     import matplotlib.pyplot as plt
 
+    if mask is not None and mask.shell.nside != field.shell.nside:
+        raise ValueError("mask must share the field's nside.")
     if flip not in ("geo", "astro"):
         raise ValueError(f"flip must be 'geo' or 'astro'; got {flip!r}.")
     if ax is None:
@@ -94,6 +101,9 @@ def paint(
     values = data[pix]
     if log_data:
         values = np.log10(np.maximum(values, 1e-30))
+    if mask is not None:
+        hidden = inside & ~np.asarray(mask.data)[pix]
+        values = np.where(hidden, np.nan, values)
     image = np.where(inside, values, np.nan)
 
     mappable = ax.imshow(
@@ -104,6 +114,18 @@ def paint(
         interpolation="nearest",
         **kwargs,
     )
+    if mask is not None:
+        # separate solid layer: a NaN colour on the main image would also grey
+        # the background outside the ellipse
+        from matplotlib.colors import ListedColormap
+
+        ax.imshow(
+            np.where(hidden, 1.0, np.nan),
+            origin="lower",
+            extent=(-X_MAX, X_MAX, -Y_MAX, Y_MAX),
+            cmap=ListedColormap([mask_color]),
+            interpolation="nearest",
+        )
     if graticule:
         _draw_graticule(ax)
     ax.set_aspect("equal")

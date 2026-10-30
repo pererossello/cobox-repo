@@ -106,12 +106,19 @@ class ProjectionKernel(eqx.Module):
     def plot(
         self, ell: ArrayLike, ax=None, *, figsize=(6.5, 4.4), **kwargs
     ) -> "PaintResult":
-        """Plot Delta_ell(k) against k for the selected multipoles; return a PaintResult."""
+        """Plot Delta_ell(k) for integer multipoles in [0, ell_max]; return a PaintResult."""
         from ..field.stats._plot import PaintResult, get_ax
 
+        ell = np.atleast_1d(ell)
+        if ell.ndim != 1 or ell.size == 0:
+            raise ValueError("ell must be an integer or a nonempty 1D array of integers.")
+        if not np.issubdtype(ell.dtype, np.integer):
+            raise TypeError("ell must contain integers.")
+        if np.any((ell < 0) | (ell > self.ell_max)):
+            raise ValueError(f"ell must be in [0, {self.ell_max}].")
         fig, ax = get_ax(ax, figsize)
         k = np.asarray(self.k)
-        for ell_i in np.atleast_1d(ell).astype(int):
+        for ell_i in ell:
             ax.plot(
                 k, np.asarray(self.values[ell_i]), label=rf"$\ell={ell_i}$", **kwargs
             )

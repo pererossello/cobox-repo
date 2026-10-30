@@ -41,14 +41,7 @@ def _checked_harmonics(field):
     data = eqx.error_if(
         data, jnp.any(~jnp.isfinite(data)), "Harmonic modes must be finite."
     )
-    real_dtype = jnp.real(data).dtype
-    tolerance = 32 * jnp.finfo(real_dtype).eps * jnp.abs(data[:, 0])
-    data = eqx.error_if(
-        data,
-        jnp.any(jnp.abs(jnp.imag(data[:, 0])) > tolerance),
-        "Real scalar fields require real m=0 coefficients.",
-    )
-    # Remove only tolerated imaginary roundoff in m=0.
+    # m=0 coefficients of a real field are real; drop transform roundoff.
     return data.at[:, 0].set(jnp.real(data[:, 0]))
 
 

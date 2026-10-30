@@ -109,7 +109,7 @@ class AngularSpectrum(eqx.Module):
         x, y = np.asarray(self.ell), np.asarray(y)
         if y.ndim == 1:
             lines = [(y, {})]
-        elif y.ndim == 3:
+        elif y.ndim == 3 and y.shape[1] == y.shape[2]:
             n = y.shape[1]
             lines = [
                 (y[:, i, j], {"label": f"{i}{j}"})

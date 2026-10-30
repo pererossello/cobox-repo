@@ -11,7 +11,7 @@ import numpyro
 import numpyro.distributions as dist
 
 from ..shell import _harmonic
-from ..shell.modemask import EllModeMask
+from ..masks import EllModeMask
 from ._covariance import covariance_factor
 from ._modes import sampling_mask
 

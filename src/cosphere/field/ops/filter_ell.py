@@ -1,4 +1,4 @@
-"""Isotropic harmonic filtering of real scalar shell fields."""
+"""Harmonic filtering of real scalar shell fields."""
 
 from dataclasses import replace
 from typing import TYPE_CHECKING

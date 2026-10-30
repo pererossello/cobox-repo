@@ -27,17 +27,33 @@ def gaussian_profile(theta, sigma, ell_max):
     ] / (4 * pi)
 
 
+def compact_regions(
+    kind: str, scale: jax.Array, outer_radius: jax.Array | None
+) -> tuple[tuple[jax.Array | None, jax.Array, int], ...]:
+    """(inner, outer, coefficient) regions; None means a closed central disc."""
+    disc = (None, scale, 1)
+    if kind == "disc":
+        return (disc,)
+    if outer_radius is None:
+        raise ValueError(f"{kind} windows need an outer_radius.")
+    annulus = (scale, outer_radius, 1)
+    if kind == "annulus":
+        return (annulus,)
+    if kind == "aperture":
+        return (disc, (scale, outer_radius, -1))
+    raise ValueError("Only disc, annulus and aperture have compact regions.")
+
+
 def profile(kind, scale, outer_radius, theta, ell_max):
     if kind == "gaussian":
         return gaussian_profile(theta, scale, ell_max)
-    disc = jnp.where(theta <= scale, 1 / cap_area(scale), 0.0)
-    if kind == "disc":
-        return disc
-    area = (
-        4
-        * pi
-        * jnp.sin((outer_radius + scale) / 2)
-        * jnp.sin((outer_radius - scale) / 2)
-    )
-    annulus = jnp.where((theta > scale) & (theta <= outer_radius), 1 / area, 0.0)
-    return annulus if kind == "annulus" else disc - annulus
+    result = jnp.zeros_like(theta)
+    for inner, outer, coefficient in compact_regions(kind, scale, outer_radius):
+        if inner is None:
+            inside = theta <= outer
+            area = cap_area(outer)
+        else:
+            inside = (theta > inner) & (theta <= outer)
+            area = 4 * pi * jnp.sin((outer + inner) / 2) * jnp.sin((outer - inner) / 2)
+        result = result + jnp.where(inside, coefficient / area, 0.0)
+    return result

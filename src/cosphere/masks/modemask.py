@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 
 if TYPE_CHECKING:
-    from .shell import Shell
+    from ..shell import Shell
 
 
 class EllModeMask(eqx.Module):

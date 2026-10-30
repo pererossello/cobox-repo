@@ -61,9 +61,13 @@ def pix2ang(nside: int, pix: jax.Array) -> tuple[jax.Array, jax.Array]:
 
 
 def zphi2pix(
-    nside: int, z: jax.Array, sin_theta: jax.Array, phi: jax.Array
+    nside: int, z: jax.Array, sin_theta: jax.Array, phi: jax.Array, near_pole: jax.Array
 ) -> jax.Array:
-    """RING pixel containing the direction with cos(theta) = z, sin(theta), and phi."""
+    """RING pixel containing the direction with cos(theta) = z, sin(theta), and phi.
+
+    near_pole selects the sin(theta) form of the polar ring coordinate, as healpy
+    does; elsewhere sqrt(3 (1 - |z|)) keeps it below nside at the cap boundary.
+    """
     # sin(pi) can round slightly negative. Colatitude has nonnegative sine;
     # preserving that domain prevents an invalid polar ring/pixel index.
     sin_theta = jnp.maximum(sin_theta, 0.0)
@@ -82,9 +86,11 @@ def zphi2pix(
     ip = jnp.mod((jp + jm - nside + kshift + 1) // 2, 4 * nside)
     pix_e = ncap + (ir - 1) * 4 * nside + ip
 
-    # polar caps: sqrt(3 (1 - |z|)) written with sin(theta), accurate near the poles
+    # polar caps
     tp = tt - jnp.floor(tt)
-    tmp = nside * sin_theta / jnp.sqrt((1.0 + za) / 3.0)
+    tmp = nside * jnp.where(
+        near_pole, sin_theta / jnp.sqrt((1.0 + za) / 3.0), jnp.sqrt(3.0 * (1.0 - za))
+    )
     jp = jnp.floor(tp * tmp).astype(int)
     jm = jnp.floor((1.0 - tp) * tmp).astype(int)
     ir = jp + jm + 1  # ring counted from the nearer pole
@@ -94,19 +100,43 @@ def zphi2pix(
     return jnp.where(za <= 2.0 / 3.0, pix_e, pix_p)
 
 
-def rings(nside: int) -> dict[str, jax.Array]:
-    """Per-ring arrays (length 4 nside - 1): theta, npix, start pixel, phi of the first pixel."""
-    npix = 12 * nside**2
-    ncap = 2 * nside * (nside - 1)
-    i = jnp.arange(1, 4 * nside)
-    i_cap = jnp.minimum(i, 4 * nside - i)  # ring number counted from the nearer pole
+def ring_geometry(nside: int, ring: jax.Array) -> tuple[jax.Array, ...]:
+    """z = cos(theta), sin(theta), pixel count, first pixel and its phi of rings 1 .. 4 nside - 1.
 
-    north, south = i < nside, i > 3 * nside
-    ring_npix = 4 * jnp.minimum(i_cap, nside)
+    Closed form, elementwise in ring; the same arithmetic as pix2ang of the first pixel.
+    """
+    npix = 12 * nside**2
+    fact2 = 4.0 / npix
+    # ring number counted from the nearer pole
+    i_cap = jnp.minimum(ring, 4 * nside - ring)
+    north, south = ring < nside, ring >= 3 * nside
+    cap = north | south
+
+    tmp = i_cap**2 * fact2  # 1 - |z| on the polar caps
+    z_e = (2 * nside - ring) * (2 * nside * fact2)
+    z = jnp.where(north, 1.0 - tmp, jnp.where(south, tmp - 1.0, z_e))
+    one_minus_abs_z = jnp.where(cap, tmp, 1.0 - jnp.abs(z_e))
+    sin_theta = jnp.sqrt(one_minus_abs_z * (2.0 - one_minus_abs_z))
+
+    size = 4 * jnp.minimum(i_cap, nside)
     start = jnp.where(
         north,
-        2 * i * (i - 1),
-        jnp.where(south, npix - 2 * i_cap * (i_cap + 1), ncap + (i - nside) * 4 * nside),
+        2 * ring * (ring - 1),
+        jnp.where(
+            south,
+            npix - 2 * i_cap * (i_cap + 1),
+            2 * nside * (nside - 1) + (ring - nside) * 4 * nside,
+        ),
     )
-    theta, phi0 = pix2ang(nside, start)
-    return {"theta": theta, "npix": ring_npix, "start": start, "phi0": phi0}
+    fodd = jnp.where((ring + nside) % 2 == 1, 1.0, 0.5)
+    phi0 = jnp.where(
+        cap, 0.5 * (0.5 * pi) / jnp.maximum(i_cap, 1), (1 - fodd) * pi / (2 * nside)
+    )
+    return z, sin_theta, size, start, phi0
+
+
+def rings(nside: int) -> dict[str, jax.Array]:
+    """Per-ring arrays (length 4 nside - 1): theta, npix, start pixel, phi of the first pixel."""
+    z, sin_theta, size, start, phi0 = ring_geometry(nside, jnp.arange(1, 4 * nside))
+    theta = jnp.arctan2(sin_theta, z)
+    return {"theta": theta, "npix": size, "start": start, "phi0": phi0}

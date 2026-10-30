@@ -8,7 +8,7 @@ import numpyro
 import numpyro.distributions as dist
 
 from ..shell import _harmonic
-from ..shell.modemask import EllModeMask
+from ..masks import EllModeMask
 from ._modes import sampling_mask
 from ._spectrum import shell_values
 
@@ -48,11 +48,14 @@ class ShellGRFSampler(eqx.Module):
     ) -> "ShellField":
         from ..field import ShellField
 
-        u = randoms["u"]
+        u = jnp.asarray(randoms["u"])
         mask = self._get_mask(shell)
         n_dof = _harmonic.n_dof(mask)
         if u.shape != (n_dof,):
             raise ValueError(f"expected randoms['u'] shape ({n_dof},); got {u.shape}.")
+        if jnp.iscomplexobj(u):
+            raise TypeError("randoms['u'] must be real.")
+        u = eqx.error_if(u, jnp.any(~jnp.isfinite(u)), "randoms['u'] must be finite.")
         raw = _harmonic.pack(u, mask)
         return ShellField(
             data=raw * self._multiplier(shell, mask, cl), shell=shell, has_hat=True
@@ -72,8 +75,13 @@ class ShellGRFSampler(eqx.Module):
         shell: "Shell",
         cl: "AngularSpectrum",
     ) -> dict:
-        """Inverse of ``sample``: exact for a harmonic-space field; a pixel-space
-        field goes through ``sht`` and is as accurate as that transform."""
+        """Recover latents on retained modes with positive power; zero elsewhere.
+
+        Exact for harmonic fields sampled with positive retained power. A pixel
+        field goes through ``sht`` and is as accurate as that transform.
+        """
+        if field.shell != shell:
+            raise ValueError("field must live on the supplied shell.")
         mask = self._get_mask(shell)
         multiplier = self._multiplier(shell, mask, cl)
         safe = jnp.where(multiplier > 0, multiplier, 1.0)

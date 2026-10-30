@@ -14,7 +14,7 @@ def grf_to_dict(sampler: ShellGRFSampler) -> dict:
 
 
 def grf_from_dict(config: dict, cls: type[ShellGRFSampler]) -> ShellGRFSampler:
-    from ..shell.modemask import EllModeMask
+    from ..masks import EllModeMask
 
     unknown = set(config) - set(_GRF_FIELDS)
     if unknown:

@@ -7,14 +7,24 @@ or external HEALPix dependency is needed.
 """
 
 from math import pi
+from typing import TYPE_CHECKING, Literal, get_args
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
+from jax.typing import ArrayLike
 
 from . import _pixels
 
+if TYPE_CHECKING:
+    from .shell import Shell
 
-def _ring_pair(rings, ring, phi):
+StencilMethod = Literal["ngp", "bilinear"]
+
+
+def _ring_pair(
+    rings: dict[str, jax.Array], ring: jax.Array, phi: jax.Array
+) -> tuple[jax.Array, jax.Array]:
     size = rings["npix"][ring]
     coordinate = (phi - rings["phi0"][ring]) * size / (2 * pi)
     left = jnp.floor(coordinate).astype(int)
@@ -23,7 +33,9 @@ def _ring_pair(rings, ring, phi):
     return pixels, jnp.stack((1 - fraction, fraction))
 
 
-def bilinear(nside, theta, phi):
+def bilinear(
+    nside: int, theta: jax.Array, phi: jax.Array
+) -> tuple[jax.Array, jax.Array]:
     rings = _pixels.rings(nside)
     angles = rings["theta"]
     above = jnp.searchsorted(angles, theta, side="right") - 1
@@ -55,7 +67,7 @@ def bilinear(nside, theta, phi):
     )
 
 
-def real_finite(value, name):
+def real_finite(value: ArrayLike, name: str) -> jax.Array:
     value = jnp.asarray(value)
     if jnp.iscomplexobj(value):
         raise ValueError(f"{name} must be real.")
@@ -63,17 +75,19 @@ def real_finite(value, name):
     return eqx.error_if(value, jnp.any(~jnp.isfinite(value)), f"{name} must be finite.")
 
 
-def stencil(shell, theta, phi, *, method):
+def stencil(
+    shell: "Shell", theta: ArrayLike, phi: ArrayLike, *, method: StencilMethod
+) -> tuple[jax.Array, jax.Array]:
     """Validate angular queries and return shared (neighbours, N) geometry."""
-    if method not in ("ngp", "bilinear"):
-        raise ValueError("method must be 'ngp' or 'bilinear'.")
-    theta, phi = real_finite(theta, "theta"), real_finite(phi, "phi")
-    if theta.ndim != 1 or phi.shape != theta.shape:
+    if method not in get_args(StencilMethod):
+        raise ValueError(
+            f"method must be one of {get_args(StencilMethod)}; got {method!r}."
+        )
+    t, p = real_finite(theta, "theta"), real_finite(phi, "phi")
+    if t.ndim != 1 or p.shape != t.shape:
         raise ValueError("theta and phi must be 1D arrays of equal length.")
-    theta = eqx.error_if(
-        theta, jnp.any((theta < 0) | (theta > pi)), "theta must be in [0, pi]."
-    )
-    phi = jnp.mod(phi, 2 * pi)
+    t = eqx.error_if(t, jnp.any((t < 0) | (t > pi)), "theta must be in [0, pi].")
+    p = jnp.mod(p, 2 * pi)
     if method == "ngp":
-        return shell.ang2pix(theta, phi)[None, :], jnp.ones_like(theta)[None, :]
-    return bilinear(shell.nside, theta, phi)
+        return shell.ang2pix(t, p)[None, :], jnp.ones_like(t)[None, :]
+    return bilinear(shell.nside, t, p)

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 WindowKindLiteral = Literal["gaussian", "disc", "annulus", "aperture"]
 
 
-def _real(value, name):
+def _real(value: ArrayLike, name: str) -> jax.Array:
     value = jnp.asarray(value)
     if jnp.iscomplexobj(value):
         raise ValueError(f"{name} must be real.")
@@ -26,14 +26,11 @@ def _real(value, name):
 
 
 class Window(eqx.Module):
-    """Angular window, callable as its harmonic response b_ell.
+    """Axisymmetric window on the sphere; window(ell) gives its harmonic response b_ell.
 
-    scale is in radians: sigma for gaussian; disc/inner radius otherwise.
-    Annulus and aperture require scale < outer_radius <= pi. Disc and annulus
-    have unit integral; aperture is their difference and has zero integral.
-    Gaussian is the spherical heat kernel, b_l=exp[-l(l+1)*sigma^2/2], whose
-    small-angle profile approaches an ordinary Gaussian. No pixel response
-    is included. Sizes are differentiable leaves; kind is static.
+    Angles in radians. gaussian: scale = sigma, b_ell = exp(-ell(ell+1) sigma^2 / 2).
+    disc: radius scale. annulus: from scale to outer_radius. aperture: disc minus
+    annulus. Disc and annulus integrate to 1 (they average); aperture to 0.
     """
 
     kind: WindowKindLiteral = eqx.field(static=True)
@@ -76,7 +73,7 @@ class Window(eqx.Module):
             self.outer_radius = None
 
     def win_profile_hat(self, ell: ArrayLike) -> jax.Array:
-        """Response at nonnegative integer multipoles, preserving input shape."""
+        """Harmonic response b_ell at integer ell >= 0, same shape as ell."""
         ell = jnp.asarray(ell)
         if not jnp.issubdtype(ell.dtype, jnp.integer):
             raise ValueError("ell must contain integers.")
@@ -87,14 +84,14 @@ class Window(eqx.Module):
         return self.win_profile_hat(ell)
 
     def win_hat_on_shell(self, shell: "Shell") -> jax.Array:
+        """b_ell for ell = 0 .. shell.L - 1."""
         return self.win_profile_hat(shell.ell_1D)
 
     def win_profile(self, theta: ArrayLike, *, ell_max: int | None = None) -> jax.Array:
-        """Profile per steradian at angular separation theta in [0, pi].
+        """Profile per steradian at angle theta (radians) from the centre.
 
-        Gaussian requires an explicit static ell_max for its inverse harmonic
-        series. Increase it until the profile converges; sharp truncation can
-        ring. Other kinds have exact piecewise profiles and take no ell_max.
+        gaussian only: summed from its harmonic series up to ell_max, so raise
+        ell_max until the profile stops changing.
         """
         theta = _real(theta, "theta")
         theta = eqx.error_if(

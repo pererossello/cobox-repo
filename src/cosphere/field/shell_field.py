@@ -1,15 +1,22 @@
 from dataclasses import replace
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Optional
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import numpy as np
 from jax.typing import ArrayLike
 
 from .ops import arithmetic
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from ..masks import ShellMask
+    from ..positions import AngularPositions
     from ..shell import Shell
+    from ..shell._stencil import StencilMethod
+    from ..window import Window
     from .stats._accessor import StatsAccessor
 
 
@@ -48,6 +55,10 @@ class ShellField(eqx.Module):
         data_isht = self.shell.isht(self.data)
         return replace(self, data=data_isht, has_hat=False)
 
+    # --------------------------
+    # --- HARMONIC FILTERING ---
+    # --------------------------
+
     def filter_ell(self, response, *, iter: int = 3) -> "ShellField":
         """Multiply a_lm by a real finite scalar, (L,) array or callable of ell.
 
@@ -55,9 +66,33 @@ class ShellField(eqx.Module):
         call .isht() on the result to obtain a pixel map. This isotropic filter
         preserves real-map symmetry; it is not a spatial mask.
         """
-        from .ops.filtering import filter_ell
+        from .ops.filter_ell import filter_ell
 
         return filter_ell(self, response, iter=iter)
+
+    # ------------------------------
+    # --- FILTERING AT POSITIONS ---
+    # ------------------------------
+
+    def filter_at(
+        self,
+        points: "AngularPositions",
+        window: "Window | Sequence[Window]",
+        *,
+        mask: Optional["ShellMask"] = None,
+        chunk_size: int = 10_000,
+    ) -> jax.Array:
+        """Mean of the map over disc/annulus/aperture windows centred on points.
+
+        Returns (N,) for one Window, (N, len(window)) for several. A pixel counts
+        if its centre is inside the region; mask restricts to the pixels it keeps.
+        A window whose disc or annulus has no kept pixels gives NaN.
+        Pixel-space maps only; needs jax_enable_x64. chunk_size is points per
+        batch; lower it if very large discs run out of memory.
+        """
+        from .ops.filter_at import filter_at
+
+        return filter_at(self, points, window, mask=mask, chunk_size=chunk_size)
 
     # ---------------------
     # --- INTERPOLATION ---
@@ -68,7 +103,7 @@ class ShellField(eqx.Module):
         theta: ArrayLike,
         phi: ArrayLike,
         *,
-        method: Literal["ngp", "bilinear"] = "bilinear",
+        method: "StencilMethod" = "bilinear",
     ) -> jax.Array:
         """Interpolate pixel-centre values at equal-length 1D angles in radians.
 
@@ -176,6 +211,17 @@ class ShellField(eqx.Module):
     # ------------------
     # --- VALIDATION ---
     # ------------------
+
+    def is_weight_map(self) -> bool:
+        """True if usable as weights: pixel space, finite, nonnegative, not all zero.
+
+        No upper bound: only relative values matter where weights are used. Reads the
+        data, so not under jit.
+        """
+        if self.has_hat:
+            return False
+        d = jnp.asarray(self.data)
+        return bool(jnp.all(jnp.isfinite(d)) & jnp.all(d >= 0) & jnp.any(d > 0))
 
     def _validate_inputs(self) -> None:
         from . import _validate
