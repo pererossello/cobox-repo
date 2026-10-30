@@ -1,64 +1,67 @@
 """Redshift catalogue: sky positions and observed redshifts."""
 
-from math import pi
 from typing import TYPE_CHECKING, get_args
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from cosphere import AngularPositions
 from jax.typing import ArrayLike
+
+from .tomography import TomographicBin
+from .window import RedshiftWindow
 
 if TYPE_CHECKING:
     from cobox.box import Box
     from cobox.field import ScalarField
     from cobox.fluid.particles import MeshConventionLiteral
     from colcdm import BackgroundCosmo
-    from cosphere import Shell, ShellField
+    from cosphere import Shell, ShellField, ShellMask
 
 
 class RedshiftCatalog(eqx.Module):
-    """Objects with sky angles and observed redshifts.
+    """Objects with sky directions (AngularPositions) and observed redshifts z.
 
-    theta is the colatitude in [0, pi] and phi the longitude, in radians, in the
-    same frame as the maps the catalogue is combined with (Shell convention).
-    z is the observed redshift. Cosmology enters only through the BackgroundCosmo
-    passed to the distance and box methods.
+    Cosmology enters only through the BackgroundCosmo passed to the distance
+    and box methods.
     """
 
-    theta: jax.Array
-    phi: jax.Array
+    angular: AngularPositions
     z: jax.Array
 
     def __init__(self, theta: ArrayLike, phi: ArrayLike, z: ArrayLike):
-        self.theta = jnp.asarray(theta, dtype=float)
-        self.phi = jnp.asarray(phi, dtype=float)
-        self.z = jnp.asarray(z, dtype=float)
-        self._validate()
+        self.angular = AngularPositions(theta, phi)
+        z = jnp.asarray(z, dtype=float)
+        if z.shape != (len(self.angular),):
+            raise ValueError(
+                f"z must have shape ({len(self.angular)},); got {z.shape}."
+            )
+        self.z = eqx.error_if(
+            z, jnp.any(~jnp.isfinite(z) | (z <= -1)), "z must be finite and > -1."
+        )
 
     @classmethod
     def from_radec(
         cls, ra: ArrayLike, dec: ArrayLike, z: ArrayLike, *, degrees: bool = True
     ) -> "RedshiftCatalog":
         """From right ascension and declination: theta = pi/2 - dec, phi = ra."""
-        ra, dec = jnp.asarray(ra, dtype=float), jnp.asarray(dec, dtype=float)
-        if degrees:
-            ra, dec = jnp.deg2rad(ra), jnp.deg2rad(dec)
-        return cls(0.5 * pi - dec, ra, z)
+        a = AngularPositions.from_radec(ra, dec, degrees=degrees)
+        return cls(a.theta, a.phi, z)
 
     @classmethod
     def from_vectors(cls, vectors: ArrayLike, z: ArrayLike) -> "RedshiftCatalog":
-        """From directions, shape (3, N), need not be normalized (e.g. positions
-        relative to the observer); the inverse of unit_vectors."""
-        vectors = jnp.asarray(vectors, dtype=float)
-        if vectors.ndim != 2 or vectors.shape[0] != 3:
-            raise ValueError(f"vectors must have shape (3, N); got {vectors.shape}.")
-        x, y, w = vectors
-        r = jnp.sqrt(x * x + y * y + w * w)
-        r = eqx.error_if(r, jnp.any(r == 0), "vectors must be nonzero.")
-        theta = jnp.arccos(jnp.clip(w / r, -1.0, 1.0))
-        phi = jnp.mod(jnp.arctan2(y, x), 2 * pi)
-        return cls(theta, phi, z)
+        """From directions, shape (3, N); need not be normalized."""
+        a = AngularPositions.from_vectors(vectors)
+        return cls(a.theta, a.phi, z)
+
+    @property
+    def theta(self) -> jax.Array:
+        return self.angular.theta
+
+    @property
+    def phi(self) -> jax.Array:
+        return self.angular.phi
 
     # -----------------
     # --- SELECTION ---
@@ -67,10 +70,8 @@ class RedshiftCatalog(eqx.Module):
     def select(self, mask: ArrayLike) -> "RedshiftCatalog":
         """Objects where mask is True. Changes the size, so it runs on the host,
         not under jit; inside jitted code, use zero weights instead."""
-        mask = np.asarray(mask)
-        if mask.dtype != bool or mask.shape != (len(self),):
-            raise ValueError(f"mask must be a boolean array of shape ({len(self)},).")
-        return RedshiftCatalog(self.theta[mask], self.phi[mask], self.z[mask])
+        a = self.angular.select(mask)
+        return RedshiftCatalog(a.theta, a.phi, self.z[np.asarray(mask)])
 
     def z_slice(self, z_min: float, z_max: float) -> "RedshiftCatalog":
         """Objects with z_min <= z < z_max (half-open, so adjacent slices do not
@@ -87,14 +88,7 @@ class RedshiftCatalog(eqx.Module):
     @property
     def unit_vectors(self) -> jax.Array:
         """Direction of each object, shape (3, N), as Shell.unit_vectors."""
-        sin_theta = jnp.sin(self.theta)
-        return jnp.stack(
-            [
-                sin_theta * jnp.cos(self.phi),
-                sin_theta * jnp.sin(self.phi),
-                jnp.cos(self.theta),
-            ]
-        )
+        return self.angular.unit_vectors
 
     def pixels(self, shell: "Shell") -> jax.Array:
         """Index of the shell pixel containing each object."""
@@ -140,16 +134,12 @@ class RedshiftCatalog(eqx.Module):
     def shell_counts(
         self, shell: "Shell", weights: ArrayLike | None = None
     ) -> "ShellField":
-        """Objects per shell pixel, or the sum of per-object weights, shape (N,).
+        """Objects per shell pixel, or the sum of per-object weights (N,).
 
-        Counts sum to len(self), or to sum(weights). E.g. weights = W(z) gives
-        weighted counts, weights = z * W(z) the weighted redshift sum. Angles only.
+        E.g. weights = W(z) gives weighted counts, weights = z * W(z) the weighted
+        redshift sum. Nearest pixel; see AngularPositions.to_shell.
         """
-        from cosphere import ShellField
-
-        weights = 1.0 if weights is None else self._check_weights(weights)
-        counts = jnp.zeros(shell.SHAPE).at[self.pixels(shell)].add(weights)
-        return ShellField(counts, shell=shell)
+        return self.angular.to_shell(shell, weights)
 
     def box_counts(
         self,
@@ -175,6 +165,72 @@ class RedshiftCatalog(eqx.Module):
             weights = self._check_weights(weights)
         counts = deposit_native(idx_pos, weights, "ngp", box.SHAPE, mesh_convention)
         return ScalarField(counts, box=box)
+
+    # --------------------------
+    # --- ANGULAR STATISTICS ---
+    # --------------------------
+
+    def tomographic_bin(
+        self,
+        shell: "Shell",
+        window: RedshiftWindow | None = None,
+        weights: ArrayLike | None = None,
+        *,
+        randoms: "RedshiftCatalog | None" = None,
+        random_weights: ArrayLike | None = None,
+        coverage: "ShellField | None" = None,
+        mask: "ShellMask | None" = None,
+    ) -> TomographicBin:
+        """These objects with weights w W(z), projected on shell; see TomographicBin."""
+        return TomographicBin(
+            self, shell, window=window, weights=weights, randoms=randoms,
+            random_weights=random_weights, coverage=coverage, mask=mask,
+        )
+
+    # ------------
+    # --- PLOT ---
+    # ------------
+
+    def plot_wedge(self, ax=None, **kwargs):
+        """Polar RA/radius wedge; see cozcat.plot.plot_wedge for options.
+
+        Angular limits are in degrees. Defaults to redshift radius; use
+        radius="comoving", background=... for radial distance in Mpc/h.
+        Returns CatalogPlotResult without calling show().
+        """
+        from .plot.wedge import plot_wedge
+
+        return plot_wedge(self, ax=ax, **kwargs)
+
+    def plot_sky(self, ax=None, **kwargs):
+        """Sky scatter; see cozcat.plot.plot_sky for options.
+
+        Supports rectangular and Mollweide projections, degree-valued angular
+        cuts and reproducible display sampling. Returns CatalogPlotResult.
+        """
+        from .plot.sky import plot_sky
+
+        return plot_sky(self, ax=ax, **kwargs)
+
+    def plot_3d(self, ax=None, **kwargs):
+        """3D radial view; see cozcat.plot.plot_3d for options.
+
+        Reuse ax to overlay shells. Radius defaults to redshift, a visualization
+        coordinate rather than physical distance. Returns CatalogPlotResult.
+        """
+        from .plot.spatial import plot_3d
+
+        return plot_3d(self, ax=ax, **kwargs)
+
+    def plot_redshift(self, ax=None, **kwargs):
+        """Redshift histogram; see cozcat.plot.plot_redshift for options.
+
+        Uses all selected objects, with optional per-object weights and bins.
+        Returns CatalogPlotResult without calling show().
+        """
+        from .plot.histogram import plot_redshift
+
+        return plot_redshift(self, ax=ax, **kwargs)
 
     # ---------------------
     # --- ARRAY SURFACE ---
@@ -229,25 +285,4 @@ class RedshiftCatalog(eqx.Module):
             )
         return eqx.error_if(
             weights, jnp.any(~jnp.isfinite(weights)), "weights must be finite."
-        )
-
-    def _validate(self) -> None:
-        """Shapes are checked eagerly; values with eqx.error_if, so also under jit."""
-        shapes = (self.theta.shape, self.phi.shape, self.z.shape)
-        if self.theta.ndim != 1 or len(set(shapes)) != 1:
-            raise ValueError(
-                f"theta, phi and z must be 1D arrays of equal length; got shapes {shapes}."
-            )
-        self.theta = eqx.error_if(
-            self.theta,
-            jnp.any(~jnp.isfinite(self.theta) | (self.theta < 0) | (self.theta > pi)),
-            "theta must be finite and in [0, pi].",
-        )
-        self.phi = eqx.error_if(
-            self.phi, jnp.any(~jnp.isfinite(self.phi)), "phi must be finite."
-        )
-        self.z = eqx.error_if(
-            self.z,
-            jnp.any(~jnp.isfinite(self.z) | (self.z <= -1)),
-            "z must be finite and > -1.",
         )
